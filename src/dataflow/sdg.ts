@@ -1,6 +1,7 @@
 /**
  * Stage 7 — SDG assembly: stitch the per-function PDGs with interprocedural edges
- * (Horwitz–Reps–Binkley), all keyed by canonical `(signature, node_id)`.
+ * (Horwitz–Reps–Binkley), all keyed by canonical `(signature, node_id)`. Operates purely on the
+ * serialized CallableGraphData (no AST access).
  *
  * Call sites are collapsed onto their containing statement node (the node is both actual-in and
  * actual-out), so:
@@ -16,14 +17,12 @@
  * External / unresolved callees have no graphs to reference (no dangling endpoints — the
  * call-graph rule), so they contribute only conservative pass-through SUMMARY self-edges.
  */
-import { Node } from "ts-morph";
 import type { SdgEdge } from "../schema";
-import type { FunctionCfgBuild } from "./model";
+import { renderGlobal, type CallableGraphData } from "./model";
 import type { CallSiteRef, FunctionSummary } from "./summaries";
-import { renderGlobal } from "./defuse";
 
 export function assembleSdg(
-  builds: Map<string, FunctionCfgBuild>,
+  datas: Map<string, CallableGraphData>,
   callSites: Map<string, CallSiteRef[]>,
   summaries: Map<string, FunctionSummary>,
 ): SdgEdge[] {
@@ -36,10 +35,10 @@ export function assembleSdg(
     out.push(e);
   };
 
-  for (const caller of [...builds.keys()].sort()) {
+  for (const caller of [...datas.keys()].sort()) {
     for (const cs of callSites.get(caller) ?? []) {
       const at = (node: number): { signature: string; node: number } => ({ signature: caller, node });
-      const callee = cs.callee ? builds.get(cs.callee) : undefined;
+      const callee = cs.callee ? datas.get(cs.callee) : undefined;
 
       if (!callee || !cs.callee) {
         // External / unresolved: conservative pass-through — every argument may flow to the result.
@@ -53,11 +52,10 @@ export function assembleSdg(
       add({ source: at(cs.nodeId), target: { signature: calleeSig, node: callee.entryId }, type: "CALL" });
 
       // Positional PARAM_IN edges; extra arguments bind to a trailing rest parameter if there is one.
-      const rest = hasRestParam(callee);
       for (let i = 0; i < cs.argCount; i++) {
         let pIdx = i;
         if (pIdx >= callee.paramIds.length) {
-          if (!rest || callee.paramIds.length === 0) continue;
+          if (!callee.hasRestParam || callee.paramIds.length === 0) continue;
           pIdx = callee.paramIds.length - 1;
         }
         add({
@@ -111,10 +109,4 @@ export function assembleSdg(
       a.type.localeCompare(b.type) ||
       (a.var ?? "").localeCompare(b.var ?? ""),
   );
-}
-
-function hasRestParam(build: FunctionCfgBuild): boolean {
-  const params = (build.fn as unknown as { getParameters?: () => Node[] }).getParameters?.() ?? [];
-  const last = params[params.length - 1];
-  return last !== undefined && Node.isParameterDeclaration(last) && last.isRestParameter();
 }

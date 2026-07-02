@@ -15,7 +15,7 @@ import type { CfgEdge, FunctionCfg, ProgramGraphs, SdgEdge } from "../src/schema
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/dataflow-app");
 
-function options(level: 1 | 2 | 3, cacheDir: string): AnalysisOptions {
+function options(level: 1 | 2 | 3, cacheDir: string, jobs: number): AnalysisOptions {
   return {
     input: FIXTURE,
     output: null,
@@ -28,6 +28,7 @@ function options(level: 1 | 2 | 3, cacheDir: string): AnalysisOptions {
     analysisLevel: level,
     graphs: ["cfg", "dfg", "pdg", "sdg"],
     graphFieldDepth: 3,
+    jobs,
     targetFiles: null,
     skipTests: true,
     eager: true,
@@ -39,16 +40,16 @@ function options(level: 1 | 2 | 3, cacheDir: string): AnalysisOptions {
   };
 }
 
-function run(level: 1 | 2 | 3): ReturnType<typeof analyze> {
+async function run(level: 1 | 2 | 3, jobs = 1): Promise<Awaited<ReturnType<typeof analyze>>> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-dataflow-test-"));
   try {
-    return analyze(options(level, cacheDir));
+    return await analyze(options(level, cacheDir, jobs));
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
 }
 
-const app = run(3);
+const app = await run(3);
 const pg = app.program_graphs as ProgramGraphs;
 
 const cfgOf = (sig: string): FunctionCfg => {
@@ -366,13 +367,18 @@ describe("summary and SDG gates", () => {
 // ------------------------------------------------------------------------------------------------
 
 describe("determinism and gating", () => {
-  test("two runs on identical content emit byte-identical program_graphs", () => {
-    const second = run(3);
+  test("two runs on identical content emit byte-identical program_graphs", async () => {
+    const second = await run(3);
     expect(JSON.stringify(second.program_graphs)).toBe(JSON.stringify(pg));
   });
 
-  test("-a 1 emits no program_graphs section", () => {
-    const level1 = run(1);
+  test("--jobs N (workers + wavefront) is byte-identical to --jobs 1 (the differential oracle)", async () => {
+    const parallel = await run(3, 4);
+    expect(JSON.stringify(parallel.program_graphs)).toBe(JSON.stringify(pg));
+  }, 60_000);
+
+  test("-a 1 emits no program_graphs section", async () => {
+    const level1 = await run(1);
     expect(level1.program_graphs).toBeUndefined();
     expect(JSON.stringify(level1)).not.toContain("program_graphs");
   });
@@ -409,5 +415,11 @@ describe("--graphs flag validation", () => {
     const r = cli("-i", FIXTURE, "-a", "3", "--graph-field-depth", "zero", "--no-build");
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr.toString()).toContain("invalid --graph-field-depth");
+  });
+
+  test("--jobs must be a positive integer", () => {
+    const r = cli("-i", FIXTURE, "-a", "3", "--jobs", "0", "--no-build");
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("invalid --jobs");
   });
 });
