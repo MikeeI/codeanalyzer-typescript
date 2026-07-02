@@ -29,9 +29,14 @@ it first; everything else is a stage it calls, in order:
    JSDoc, with precise source spans.
 3. **call graph** (`src/semantic_analysis`) — `selectProvider()` picks tsc / jelly /
    union; each provider returns edges + external (phantom) symbols.
-4. **cache** (`src/utils/cache.ts`) — content-hash cache under `.codeanalyzer/`, so
-   re-analysis only touches what changed.
-5. **output** (`src/build`, `src/build/neo4j`) — `analysis.json`, a self-contained
+4. **program graphs** (`src/dataflow`) — level 3 only (`-a 3`): CFG → post-dominance/CDG →
+   access-path def-use → PDG → SCC-condensed bottom-up summaries → SDG, emitted as the
+   `program_graphs` section keyed by `(signature, node_id)`. Decisions: the "Level 3"
+   half of `.claude/SCHEMA_DECISIONS.md`; contract + staged follow-ups: issue #2.
+5. **cache** (`src/utils/cache.ts`) — content-hash cache under `.codeanalyzer/`, so
+   re-analysis only touches what changed (level 3 also records summaries +
+   dependency edges in `graphs_summaries.json`).
+6. **output** (`src/build`, `src/build/neo4j`) — `analysis.json`, a self-contained
    `graph.cypher` snapshot, or an incremental Bolt push to a live database.
 
 The shape of everything is the **schema** in `src/schema` (`TSApplication` is the top
@@ -47,10 +52,11 @@ a contract.
 | `src/options` | Parsed CLI options / `AnalysisOptions` |
 | `src/syntactic_analysis` | Symbol table (ts-morph traversal) |
 | `src/semantic_analysis` | Call-graph providers (tsc, jelly, union), phantoms |
-| `src/schema` | `TSApplication` types + signatures (the output contract) |
+| `src/dataflow` | Level-3 program graphs: CFG, dominance/CDG, def-use, summaries, SDG, slicing |
+| `src/schema` | `TSApplication` types + signatures + `program_graphs` (the output contract) |
 | `src/build` | Dep materialization + output; `build/neo4j` = graph projection |
 | `src/utils` | fs, caching, logging, serialization, version |
-| `test` | Bun tests + `fixtures/sample-app` |
+| `test` | Bun tests + `fixtures/sample-app` (levels 1–2) + `fixtures/dataflow-app` (level-3 gates) |
 
 ## Commands
 
