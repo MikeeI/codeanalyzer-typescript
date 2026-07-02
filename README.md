@@ -165,6 +165,10 @@ Options:
                                  (default: all; requires -a 3)
   --graph-field-depth <k>        access-path depth bound (k-limit) for level-3
                                  dataflow (default: "3")
+  -j, --jobs <n>                 worker parallelism for level-3 graphs (default:
+                                 sequential; opt in with N ≥ 2 on large projects
+                                 — each worker loads its own copy of the
+                                 program)
   -t, --target-files <paths...>  restrict analysis to specific files
                                  (incremental)
   --skip-tests                   skip test trees (default)
@@ -280,6 +284,18 @@ globals ride the SDG as extra parameters. The analysis is deliberately sound-lea
 over-approximate; known unsoundness (dynamic `eval`, reflection/monkey-patching, npm-internal
 effects) is recorded in `.claude/SCHEMA_DECISIONS.md`. Backward slicing and taint run as queries
 over the SDG (slicing ships now inside the analyzer; the configurable taint pack is staged).
+
+**Parallelism (`-j/--jobs`).** The pipeline implements the level-3 parallel execution model:
+stage-1–4 extraction fans out per callable over a Bun worker pool (partitioned by file) and is
+posted *before* the call-graph solve so the two overlap; summary composition runs as a
+Kahn-style ready-queue wavefront over the SCC condensation DAG (the SCC is the atomic unit).
+`--jobs N` output is **byte-identical** to `--jobs 1` (node ids are span-ordered, all edge lists
+are collect-then-sorted, and the SCC fixpoint is a pure function of its inputs) — enforced by a
+differential test. It is off by default and worth opting into only on large codebases: ts-morph
+ASTs cannot cross the worker boundary, so each extraction worker loads its own copy of the
+program, which dominates the parallelizable graph math on small/mid repos (self-analysis runs
+2.5× slower at `-j 14`). Worker failure at any stage degrades to the sequential path with a
+warning — never to wrong or missing output.
 
 Levels 1/2 are unaffected: nothing in level 3 runs unless `-a 3` is requested.
 

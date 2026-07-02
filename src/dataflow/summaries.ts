@@ -7,19 +7,28 @@
  * Summaries are node-granular — dependence is tracked between CFG nodes, not sub-expressions —
  * which keeps them sound-leaning and over-approximate (the contract's precision posture).
  *
- * Composition order is Tarjan's SCC emission order (callees before callers). Within an SCC
- * (mutual recursion), member summaries are co-defined: each member's def-use is recomputed with
- * the current callee summaries applied at its call sites (globals become extra uses/defs on the
- * callsite node), iterating to a monotone fixpoint. Termination: summary domains are finite —
- * argument indices are bounded by arity and global paths are k-limited — and grow monotonically.
+ * Everything here is pure data (CallableGraphData + prior summaries): fact extraction happened
+ * once at stage 1–4 time, so an SCC's fixpoint re-runs only the reaching-defs solve. That is
+ * what lets `sccFixpoint` be the atomic unit of the wavefront — dispatched to a worker or run
+ * inline, byte-identically (it is a pure function of its inputs).
+ *
+ * Within an SCC (mutual recursion), member summaries are co-defined, iterating to a monotone
+ * fixpoint. Termination: summary domains are finite — argument indices are bounded by arity and
+ * global paths are k-limited — and grow monotonically.
  *
  * External / unresolved callees: conservative pass-through — every argument may flow to the
  * result (applied at SDG/SUMMARY emission); their global effects are unmodeled (documented
  * unsoundness: npm internals are not analyzed).
  */
-import type { Logger } from "../utils";
-import { type CallEffects, type DefUseResult, type GlobalPath, computeDefUse, renderGlobal } from "./defuse";
-import type { FunctionCfgBuild } from "./model";
+import type { PdgEdge } from "../schema";
+import { solveDefUse } from "./defuse";
+import {
+  renderGlobal,
+  type CallEffects,
+  type CallableGraphData,
+  type GlobalPath,
+  type NodeFacts,
+} from "./model";
 
 /** A call site inside a callable, mapped onto its CFG statement node. */
 export interface CallSiteRef {
@@ -40,63 +49,51 @@ export interface FunctionSummary {
   deps: string[];
 }
 
-export interface SummaryResult {
+export interface SccResult {
   summaries: Map<string, FunctionSummary>;
-  /** The fixpoint def-use per callable (its DDG already reflects callee global effects). */
-  defUse: Map<string, DefUseResult>;
-  /** SCCs in composition (reverse-topological, callees-first) order — exposed for tests. */
-  sccs: string[][];
+  /** Each member's fixpoint DDG (already reflecting callee global effects) — what the PDG emits. */
+  ddg: Map<string, PdgEdge[]>;
 }
 
-export function composeSummaries(
-  builds: Map<string, FunctionCfgBuild>,
+/**
+ * Solve one SCC to its co-defined fixpoint, given the summaries of every callee SCC (which the
+ * wavefront guarantees are complete). Pure: same inputs ⇒ same outputs, on any thread.
+ */
+export function sccFixpoint(
+  members: CallableGraphData[],
   callSites: Map<string, CallSiteRef[]>,
-  root: string,
-  k: number,
-  log: Logger,
-): SummaryResult {
-  const sigs = [...builds.keys()].sort();
-  const adj = new Map<string, string[]>();
-  for (const s of sigs) {
-    const targets = new Set<string>();
-    for (const cs of callSites.get(s) ?? []) {
-      if (cs.callee && builds.has(cs.callee) && cs.callee !== s) targets.add(cs.callee);
+  calleeSummaries: Map<string, FunctionSummary>,
+): SccResult {
+  const sorted = [...members].sort((a, b) => a.signature.localeCompare(b.signature));
+  const memberSigs = new Set(sorted.map((m) => m.signature));
+  const summaries = new Map<string, FunctionSummary>(calleeSummaries);
+  const ddg = new Map<string, PdgEdge[]>();
+
+  const selfReferential =
+    sorted.length > 1 ||
+    (callSites.get(sorted[0]?.signature ?? "") ?? []).some((cs) => cs.callee === sorted[0]?.signature);
+
+  let iterations = 0;
+  for (;;) {
+    let changed = false;
+    for (const data of sorted) {
+      const effects = effectsFor(callSites.get(data.signature) ?? [], summaries);
+      const solved = solveDefUse(data, effects);
+      const next = summarize(data, solved.ddg, solved.effective, callSites.get(data.signature) ?? []);
+      const prev = summaries.get(data.signature);
+      if (!prev || !sameSummary(prev, next)) changed = true;
+      summaries.set(data.signature, next);
+      ddg.set(data.signature, solved.ddg);
     }
-    adj.set(s, [...targets].sort());
+    iterations++;
+    if (!changed || !selfReferential) break;
+    if (iterations > 100) break; // k-limited domains make this unreachable; hard backstop anyway
   }
 
-  const sccs = tarjan(sigs, adj); // emitted callees-first
-  const summaries = new Map<string, FunctionSummary>();
-  const defUse = new Map<string, DefUseResult>();
-
-  for (const scc of sccs) {
-    // Co-define the SCC members' summaries to a fixpoint (a singleton converges in one pass +
-    // one confirmation pass only when it is self-recursive; plain members need a single pass).
-    const members = [...scc].sort();
-    const selfReferential =
-      members.length > 1 ||
-      (callSites.get(members[0] as string) ?? []).some((cs) => cs.callee === members[0]);
-    let iterations = 0;
-    for (;;) {
-      let changed = false;
-      for (const sig of members) {
-        const build = builds.get(sig) as FunctionCfgBuild;
-        const effects = effectsFor(callSites.get(sig) ?? [], summaries);
-        const du = computeDefUse(build, root, k, effects);
-        const next = summarize(build, du, callSites.get(sig) ?? []);
-        if (!summaries.has(sig) || !sameSummary(summaries.get(sig) as FunctionSummary, next)) changed = true;
-        summaries.set(sig, next);
-        defUse.set(sig, du);
-      }
-      iterations++;
-      if (!changed || !selfReferential) break;
-      if (iterations > 100) {
-        log.warn(`summary fixpoint did not settle after ${iterations} iterations for SCC [${members.join(", ")}]`);
-        break;
-      }
-    }
-  }
-  return { summaries, defUse, sccs };
+  // Return only this SCC's summaries (callee entries were working state).
+  const own = new Map<string, FunctionSummary>();
+  for (const sig of memberSigs) own.set(sig, summaries.get(sig) as FunctionSummary);
+  return { summaries: own, ddg };
 }
 
 /** Project the current callee summaries onto a function's call sites as global read/write effects. */
@@ -114,13 +111,19 @@ function effectsFor(sites: CallSiteRef[], summaries: Map<string, FunctionSummary
   return out;
 }
 
-function summarize(build: FunctionCfgBuild, du: DefUseResult, _sites: CallSiteRef[]): FunctionSummary {
+function summarize(
+  data: CallableGraphData,
+  ddg: PdgEdge[],
+  effective: Map<number, NodeFacts>,
+  sites: CallSiteRef[],
+): FunctionSummary {
   // Forward DDG adjacency (def-node → use-node = "use-node depends on def-node").
   const fwd = new Map<number, Set<number>>();
-  for (const e of du.ddg) {
+  for (const e of ddg) {
     if (!fwd.has(e.source)) fwd.set(e.source, new Set());
     fwd.get(e.source)?.add(e.target);
   }
+  const returnValueNodes = new Set(data.returnValueNodes);
   const reaches = (starts: number[]): Set<number> => {
     const seen = new Set<number>(starts);
     const stack = [...starts];
@@ -136,22 +139,22 @@ function summarize(build: FunctionCfgBuild, du: DefUseResult, _sites: CallSiteRe
     return seen;
   };
   const touchesReturn = (starts: number[]): boolean => {
-    for (const n of reaches(starts)) if (du.returnValueNodes.has(n)) return true;
+    for (const n of reaches(starts)) if (returnValueNodes.has(n)) return true;
     return false;
   };
 
   const param_flows: number[] = [];
-  for (const [i, pid] of build.paramIds.entries()) {
+  for (const [i, pid] of data.paramIds.entries()) {
     if (touchesReturn([pid])) param_flows.push(i);
   }
 
   // Global reads/writes: module-kind uses/defs anywhere in the function. Callee effects were
-  // already injected into the facts by computeDefUse, so transitive effects fall out for free.
-  // ENTRY's synthetic ambient defs are initializations, not writes — exclude them.
+  // already overlaid by solveDefUse, so transitive effects fall out for free. ENTRY's synthetic
+  // ambient defs are initializations, not writes — exclude them.
   const readsByKey = new Map<string, GlobalPath>();
   const writesByKey = new Map<string, GlobalPath>();
   const usedAt = new Map<string, number[]>();
-  for (const [nodeId, f] of du.facts) {
+  for (const [nodeId, f] of effective) {
     for (const u of f.uses) {
       if (u.baseKind !== "module") continue;
       const g: GlobalPath = { key: u.key, fields: u.fields };
@@ -160,7 +163,7 @@ function summarize(build: FunctionCfgBuild, du: DefUseResult, _sites: CallSiteRe
       arr.push(nodeId);
       usedAt.set(u.key, arr);
     }
-    if (nodeId === build.entryId) continue;
+    if (nodeId === data.entryId) continue;
     for (const d of f.defs) {
       if (d.ref.baseKind !== "module") continue;
       const g: GlobalPath = { key: d.ref.key, fields: d.ref.fields };
@@ -175,7 +178,7 @@ function summarize(build: FunctionCfgBuild, du: DefUseResult, _sites: CallSiteRe
   }
 
   const deps = new Set<string>();
-  for (const cs of _sites) if (cs.callee) deps.add(cs.callee);
+  for (const cs of sites) if (cs.callee) deps.add(cs.callee);
 
   return {
     param_flows: param_flows.sort((a, b) => a - b),
@@ -198,7 +201,7 @@ function sameSummary(a: FunctionSummary, b: FunctionSummary): boolean {
 // Tarjan SCC — emission order is reverse-topological (an SCC is emitted after every SCC it calls).
 // ------------------------------------------------------------------------------------------------
 
-function tarjan(nodes: string[], adj: Map<string, string[]>): string[][] {
+export function tarjanSccs(nodes: string[], adj: Map<string, string[]>): string[][] {
   const index = new Map<string, number>();
   const low = new Map<string, number>();
   const onStack = new Set<string>();
@@ -234,4 +237,21 @@ function tarjan(nodes: string[], adj: Map<string, string[]>): string[][] {
 
   for (const v of nodes) if (!index.has(v)) strongconnect(v);
   return out;
+}
+
+/** Internal-call adjacency (caller → callees with graphs), the condensation input. */
+export function callAdjacency(
+  sigs: string[],
+  callSites: Map<string, CallSiteRef[]>,
+  hasGraph: (sig: string) => boolean,
+): Map<string, string[]> {
+  const adj = new Map<string, string[]>();
+  for (const s of sigs) {
+    const targets = new Set<string>();
+    for (const cs of callSites.get(s) ?? []) {
+      if (cs.callee && hasGraph(cs.callee) && cs.callee !== s) targets.add(cs.callee);
+    }
+    adj.set(s, [...targets].sort());
+  }
+  return adj;
 }

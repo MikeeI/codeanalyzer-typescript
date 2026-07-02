@@ -46,6 +46,10 @@ export function buildProgram(): Command {
       "level-3 graph sections to emit, comma-separated: cfg | dfg | pdg | sdg (default: all; requires -a 3)",
     )
     .option("--graph-field-depth <k>", "access-path depth bound (k-limit) for level-3 dataflow", "3")
+    .option(
+      "-j, --jobs <n>",
+      "worker parallelism for level-3 graphs (default: sequential; opt in with N ≥ 2 on large projects — each worker loads its own copy of the program)",
+    )
     .option("-t, --target-files <paths...>", "restrict analysis to specific files (incremental)")
     .option("--skip-tests", "skip test trees (default)")
     .option("--include-tests", "include test trees")
@@ -99,6 +103,17 @@ export function parseArgs(argv: string[]): AnalysisOptions {
   if (!Number.isInteger(k) || k < 1) {
     program.error(`error: invalid --graph-field-depth '${kStr}' (expected a positive integer)`);
   }
+
+  // -j/--jobs: explicit value must be a positive integer; omitted ⇒ 0 = auto, resolved against
+  // the project size at extraction time (see startExtraction).
+  let jobs = 0;
+  if (o.jobs !== undefined) {
+    const j = Number(String(o.jobs));
+    if (!Number.isInteger(j) || j < 1) {
+      program.error(`error: invalid --jobs '${String(o.jobs)}' (expected a positive integer)`);
+    }
+    jobs = j;
+  }
   const emit: EmitTarget = o.emit === "neo4j" ? "neo4j" : o.emit === "schema" ? "schema" : "json";
   // --emit schema is a static artifact and needs no project; every other target requires -i.
   if (emit !== "schema" && !o.input) program.error("required option '-i, --input <path>' not specified");
@@ -133,6 +148,7 @@ export function parseArgs(argv: string[]): AnalysisOptions {
     analysisLevel: level,
     graphs,
     graphFieldDepth: k,
+    jobs,
     targetFiles: targets,
     skipTests: o.includeTests ? false : true,
     eager: Boolean(o.eager),

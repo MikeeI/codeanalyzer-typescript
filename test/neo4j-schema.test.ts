@@ -21,16 +21,17 @@ import type { AnalysisOptions } from "../src/options";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
 
-function fixtureRows() {
+async function fixtureRows() {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-schema-test-"));
   const opts: AnalysisOptions = {
     input: FIXTURE, output: null, emit: "json", appName: "sample-app",
     neo4jUri: null, neo4jUser: "neo4j", neo4jPassword: "", neo4jDatabase: null,
-    analysisLevel: 1, graphs: ["cfg", "dfg", "pdg", "sdg"], graphFieldDepth: 3, targetFiles: null, skipTests: true, eager: true,
+    analysisLevel: 1, graphs: ["cfg", "dfg", "pdg", "sdg"], graphFieldDepth: 3, jobs: 1,
+    targetFiles: null, skipTests: true, eager: true,
     noBuild: true, phantoms: true, callGraphProvider: "tsc", cacheDir, verbosity: 0,
   };
   try {
-    return project(analyze(opts), "sample-app");
+    return project(await analyze(opts), "sample-app");
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -49,8 +50,9 @@ function specificLabel(labels: string[]): string {
   return labels.find((l) => l !== "Symbol" && !markers.has(l)) ?? "Symbol";
 }
 
+const rows = await fixtureRows();
+
 describe("neo4j schema conformance", () => {
-  const rows = fixtureRows();
 
   test("every emitted node label + property is declared in the schema", () => {
     for (const node of rows.nodes) {

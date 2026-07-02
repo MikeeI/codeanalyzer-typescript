@@ -27,6 +27,14 @@ export interface AnalysisOptions {
   graphs: GraphSelector[];
   /** k-limit for access-path depth in the level-3 dataflow (`--graph-field-depth`, default 3). */
   graphFieldDepth: number;
+  /**
+   * Worker parallelism for the level-3 pipeline (`-j/--jobs`). 0 = auto (currently sequential:
+   * each extraction worker must materialize its own whole-program ts-morph project, which
+   * measurably dominates the parallelizable graph math on small/mid repos); an explicit N ≥ 2
+   * opts in for large codebases; 1 = fully sequential (the debug mode and differential oracle —
+   * `--jobs N` output is byte-identical).
+   */
+  jobs: number;
   /** Restrict analysis to these files (project-relative or absolute). null ⇒ whole project. */
   targetFiles: string[] | null;
   /** Skip test trees (default true). */

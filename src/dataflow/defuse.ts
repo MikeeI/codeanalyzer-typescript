@@ -1,5 +1,13 @@
 /**
- * Stage 3 — variable identity (k-limited access paths) and local def-use (the DDG).
+ * Stage 3 — variable identity (k-limited access paths) and local def-use (the DDG), split in two
+ * along the AST/data boundary:
+ *
+ *  - `extractFunctionFacts` (AST-bound, ONCE per callable): walks the ts-morph AST and records
+ *    each node's defs/uses, the copy-alias pairs, and the return-value nodes. This is the only
+ *    half that touches the AST, so it can run inside extraction workers.
+ *  - `solveDefUse` (pure data, re-run freely): reaching definitions over the serialized CFG with
+ *    callee global effects overlaid at callsite nodes → labeled DDG edges. The summary fixpoint
+ *    (stage 6) re-runs ONLY this half per iteration — never re-extraction.
  *
  * Access-path model: `base(.field | [*])*`, where the base is a local, parameter, `this`,
  * captured variable, or module binding — identified by its *declaration node* (so shadowed names
@@ -12,102 +20,71 @@
  * bases connected by direct copies (`const q = p`); a write through one name weakly updates the
  * other. Points-to-backed aliasing via Jelly's solved state is the staged upgrade (PR F).
  *
- * Def-use: classic forward may reaching-definitions over the stage-1 CFG. Strong (killing)
- * defs are whole-base writes to locals/params; every field write is weak. Captured/module/this
- * bases get a synthetic def at ENTRY (their value on function entry) — the same convention the
- * SDG uses when it targets ENTRY with global PARAM_IN edges. Reads inside nested callables of
- * variables they capture are attributed to the declaring statement node (capture-at-declaration).
- *
- * Call-site global effects (`callEffects`): the summary driver (stage 6) re-runs this analysis
- * with the transitive global reads/writes of each call's callee applied at the callsite node,
- * which is how cross-function global flow becomes visible in the caller's DDG.
+ * Def-use: classic forward may reaching-definitions. Strong (killing) defs are whole-base writes
+ * to locals/params; every field write is weak. Captured/module/this bases get a synthetic def at
+ * ENTRY (their value on function entry) — the same convention the SDG uses when it targets ENTRY
+ * with global PARAM_IN edges. Reads inside nested callables of variables they capture are
+ * attributed to the declaring statement node (capture-at-declaration). EXIT doubles as the HRB
+ * formal-out node: return-value nodes and module-global writes get synthetic DDG edges into EXIT.
  */
 import { Node, SyntaxKind } from "ts-morph";
 import type { PdgEdge } from "../schema";
 import { fileKeyOf } from "../schema";
 import { isFunctionBoundary } from "./cfg";
-import { adjacency, type DfNode, type FunctionCfgBuild } from "./model";
+import {
+  dataAdjacency,
+  renderPath,
+  fieldsMayAlias,
+  type BaseKind,
+  type CallEffects,
+  type CallableGraphData,
+  type DefFact,
+  type DfNode,
+  type FunctionCfgBuild,
+  type NodeFacts,
+  type PathRef,
+} from "./model";
 
 // ------------------------------------------------------------------------------------------------
-// Access paths
+// Extraction (AST-bound, once per callable)
 // ------------------------------------------------------------------------------------------------
 
-export type BaseKind = "local" | "param" | "this" | "captured" | "module";
-
-export interface PathRef {
-  /** Unique base identity: decl-position for locals/params/captured, canonical path for module, "this". */
-  key: string;
-  /** Human label for the base (the variable name / canonical module path). */
-  label: string;
-  baseKind: BaseKind;
-  fields: string[]; // "f" | "[*]" | "*" (trailing truncation star)
+export interface FunctionFacts {
+  facts: Array<[number, NodeFacts]>;
+  aliasPairs: Array<[string, string]>;
+  returnValueNodes: number[];
 }
 
-export function renderPath(p: PathRef): string {
-  let s = p.label;
-  for (const f of p.fields) s += f === "[*]" ? "[*]" : `.${f}`;
-  return s;
-}
+export function extractFunctionFacts(build: FunctionCfgBuild, root: string, k: number): FunctionFacts {
+  const aliasPairs: Array<[string, string]> = [];
+  const union = (a: string, b: string): void => {
+    aliasPairs.push([a, b]);
+  };
 
-/** A global (module-binding) path as carried by summaries: canonical base + fields. */
-export interface GlobalPath {
-  key: string; // == the canonical `<modulePrefix>.<name>` label
-  fields: string[];
-}
+  const facts: Array<[number, NodeFacts]> = [];
+  for (const n of build.nodes) {
+    if (n.kind === "entry" || n.kind === "exit") {
+      facts.push([n.id, { defs: [], uses: [] }]);
+      continue;
+    }
+    facts.push([n.id, extractFacts(n, build, root, k, union)]);
+  }
 
-export function renderGlobal(g: GlobalPath): string {
-  return renderPath({ key: g.key, label: g.key, baseKind: "module", fields: g.fields });
+  const returnValueNodes: number[] = [];
+  const body = getBody(build.fn);
+  const isExprBody = body !== undefined && !Node.isBlock(body);
+  for (const n of build.nodes) {
+    if (!n.ast) continue;
+    if (Node.isReturnStatement(n.ast) && n.ast.getExpression()) returnValueNodes.push(n.id);
+    else if (isExprBody && n.ast === body) returnValueNodes.push(n.id); // arrow expression body
+  }
+
+  return { facts, aliasPairs, returnValueNodes };
 }
 
 function kLimit(fields: string[], k: number): string[] {
   return fields.length > k ? [...fields.slice(0, k), "*"] : fields;
 }
-
-/** May two field lists overlap? "*" (truncation) matches any tail; "[*]" matches any one step. */
-function fieldsMayAlias(a: string[], b: string[]): boolean {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) {
-    const x = a[i] as string;
-    const y = b[i] as string;
-    if (x === "*" || y === "*") return true;
-    if (x === "[*]" || y === "[*]") continue; // dynamic index may hit any member
-    if (x !== y) return false;
-  }
-  return true; // one path is a prefix of the other (whole-object vs member)
-}
-
-// ------------------------------------------------------------------------------------------------
-// Per-node dataflow facts
-// ------------------------------------------------------------------------------------------------
-
-export interface DefFact {
-  ref: PathRef;
-  /** Strong defs kill; only whole-base writes of locals/params qualify (field writes are weak). */
-  strong: boolean;
-}
-
-export interface NodeFacts {
-  defs: DefFact[];
-  uses: PathRef[];
-}
-
-export interface CallEffects {
-  reads: GlobalPath[];
-  writes: GlobalPath[];
-}
-
-export interface DefUseResult {
-  ddg: PdgEdge[];
-  facts: Map<number, NodeFacts>;
-  /** Union-find representative per base key (the copy-alias classes). */
-  aliasRep: Map<string, string>;
-  /** Nodes that produce the function's return value (`return expr` / arrow expression body). */
-  returnValueNodes: Set<number>;
-}
-
-// ------------------------------------------------------------------------------------------------
-// Base resolution
-// ------------------------------------------------------------------------------------------------
 
 function enclosingCallable(node: Node): Node | undefined {
   let cur: Node | undefined = node.getParent();
@@ -161,10 +138,6 @@ function resolveBase(id: Node, fn: Node, root: string): PathRef | null {
   // Declared in some other (enclosing) callable: captured.
   return { key: `cap:${decl.getStart()}`, label: name, baseKind: "captured", fields: [] };
 }
-
-// ------------------------------------------------------------------------------------------------
-// Expression walking (defs/uses extraction)
-// ------------------------------------------------------------------------------------------------
 
 class ExprWalker {
   defs: DefFact[] = [];
@@ -338,9 +311,7 @@ class ExprWalker {
         if (parent && Node.isPropertyAssignment(parent) && parent.getNameNode() === n) return;
         const b = resolveBase(n, this.fn, this.root);
         if (!b) return;
-        // Only reads that escape the nested callable count: a decl inside it resolves to
-        // local/param of the *outer* fn only when it isn't nested — resolveBase already keys by
-        // decl site, so filter decls physically inside the nested subtree.
+        // Only reads that escape the nested callable count: filter decls physically inside it.
         const decl = declOf(n);
         if (decl && decl.getStart() >= fnNode.getStart() && decl.getEnd() <= fnNode.getEnd()) return;
         this.uses.push(b);
@@ -379,10 +350,6 @@ function unwrapExpr(n: Node): Node {
 function isAssignmentOperator(k: SyntaxKind): boolean {
   return k >= SyntaxKind.FirstAssignment && k <= SyntaxKind.LastAssignment;
 }
-
-// ------------------------------------------------------------------------------------------------
-// Per-node fact extraction
-// ------------------------------------------------------------------------------------------------
 
 function extractFacts(
   n: DfNode,
@@ -457,42 +424,39 @@ function extractFacts(
   return { defs: w.defs, uses: w.uses };
 }
 
+function getBody(fn: Node): Node | undefined {
+  return (fn as unknown as { getBody?: () => Node | undefined }).getBody?.();
+}
+
 // ------------------------------------------------------------------------------------------------
-// Reaching definitions → DDG
+// Solve (pure data — safe to re-run every fixpoint iteration, on any thread)
 // ------------------------------------------------------------------------------------------------
 
-export function computeDefUse(
-  build: FunctionCfgBuild,
-  root: string,
-  k: number,
-  callEffects: Map<number, CallEffects>,
-): DefUseResult {
-  // --- union-find over base keys (copy aliases) ---
+export interface SolveResult {
+  ddg: PdgEdge[];
+  /** The facts with callee effects and ENTRY ambient defs overlaid (what summaries read). */
+  effective: Map<number, NodeFacts>;
+}
+
+export function solveDefUse(data: CallableGraphData, callEffects: Map<number, CallEffects>): SolveResult {
+  // --- union-find over base keys (copy aliases, replayed from extraction) ---
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     let r = x;
     while (parent.has(r) && parent.get(r) !== r) r = parent.get(r) as string;
     return r;
   };
-  const union = (a: string, b: string): void => {
+  for (const [a, b] of data.aliasPairs) {
     const ra = find(a);
     const rb = find(b);
     if (ra !== rb) parent.set(ra, rb);
-  };
-
-  // --- facts per node ---
-  const facts = new Map<number, NodeFacts>();
-  for (const n of build.nodes) {
-    if (n.kind === "entry" || n.kind === "exit") {
-      facts.set(n.id, { defs: [], uses: [] });
-      continue;
-    }
-    facts.set(n.id, extractFacts(n, build, root, k, union));
   }
 
-  // --- apply callee global effects at callsite nodes ---
+  // --- overlay: base facts + callee global effects at callsite nodes (never mutate the base) ---
+  const effective = new Map<number, NodeFacts>();
+  for (const [id, f] of data.facts) effective.set(id, { defs: [...f.defs], uses: [...f.uses] });
   for (const [nodeId, eff] of callEffects) {
-    const f = facts.get(nodeId);
+    const f = effective.get(nodeId);
     if (!f) continue;
     for (const g of eff.reads) f.uses.push({ key: g.key, label: g.key, baseKind: "module", fields: g.fields });
     for (const g of eff.writes)
@@ -500,9 +464,9 @@ export function computeDefUse(
   }
 
   // --- ENTRY defs for ambient bases (module / captured / this): their value on entry ---
-  const entryFacts = facts.get(build.entryId) as NodeFacts;
+  const entryFacts = effective.get(data.entryId) as NodeFacts;
   const ambient = new Map<string, PathRef>();
-  for (const f of facts.values()) {
+  for (const f of effective.values()) {
     for (const u of f.uses) if (u.baseKind !== "local" && u.baseKind !== "param") ambient.set(u.key, u);
     for (const d of f.defs) if (d.ref.baseKind !== "local" && d.ref.baseKind !== "param") ambient.set(d.ref.key, d.ref);
   }
@@ -518,18 +482,18 @@ export function computeDefUse(
   }
   const universe: DefEntry[] = [];
   const genOf = new Map<number, Set<number>>();
-  for (const n of build.nodes) {
+  for (const n of data.nodes) {
     const gen = new Set<number>();
-    for (const d of facts.get(n.id)?.defs ?? []) {
+    for (const d of effective.get(n.id)?.defs ?? []) {
       gen.add(universe.length);
       universe.push({ node: n.id, ref: d.ref, strong: d.strong });
     }
     genOf.set(n.id, gen);
   }
   const killOf = new Map<number, Set<number>>();
-  for (const n of build.nodes) {
+  for (const n of data.nodes) {
     const kill = new Set<number>();
-    for (const d of facts.get(n.id)?.defs ?? []) {
+    for (const d of effective.get(n.id)?.defs ?? []) {
       if (!d.strong) continue;
       for (const [i, u] of universe.entries()) {
         if (u.node !== n.id && find(u.ref.key) === find(d.ref.key)) kill.add(i);
@@ -539,14 +503,14 @@ export function computeDefUse(
   }
 
   // --- worklist ---
-  const { succ, pred } = adjacency(build);
+  const { succ, pred } = dataAdjacency(data);
   const inOf = new Map<number, Set<number>>();
   const outOf = new Map<number, Set<number>>();
-  for (const n of build.nodes) {
+  for (const n of data.nodes) {
     inOf.set(n.id, new Set());
     outOf.set(n.id, new Set());
   }
-  const work: number[] = build.nodes.map((n) => n.id);
+  const work: number[] = data.nodes.map((n) => n.id);
   while (work.length) {
     const id = work.shift() as number;
     const inSet = new Set<number>();
@@ -567,8 +531,8 @@ export function computeDefUse(
     find(a.key) === find(b.key) && fieldsMayAlias(a.fields, b.fields);
   const ddg: PdgEdge[] = [];
   const seen = new Set<string>();
-  for (const n of build.nodes) {
-    const f = facts.get(n.id) as NodeFacts;
+  for (const n of data.nodes) {
+    const f = effective.get(n.id) as NodeFacts;
     if (!f.uses.length) continue;
     const reaching = inOf.get(n.id) as Set<number>;
     for (const u of f.uses) {
@@ -583,49 +547,29 @@ export function computeDefUse(
     }
   }
 
-  // --- return-value nodes ---
-  const returnValueNodes = new Set<number>();
-  const body = getBody(build.fn);
-  const isExprBody = body !== undefined && !Node.isBlock(body);
-  for (const n of build.nodes) {
-    if (!n.ast) continue;
-    if (Node.isReturnStatement(n.ast) && n.ast.getExpression()) returnValueNodes.add(n.id);
-    else if (isExprBody && n.ast === body) returnValueNodes.add(n.id); // arrow expression body
-  }
-
   // --- formal-out routing: EXIT doubles as the SDG formal-out node ---
   // PARAM_OUT edges source at the callee's EXIT, so the value that leaves the function must flow
   // INTO it: return-value nodes carry the return value, module-global writes are live-out state.
   // Without these edges a slice descending a PARAM_OUT would dead-end at EXIT.
-  for (const r of [...returnValueNodes].sort((a, b) => a - b)) {
-    const k2 = `${r}>${build.exitId}>return`;
+  for (const r of [...data.returnValueNodes].sort((a, b) => a - b)) {
+    const k2 = `${r}>${data.exitId}>return`;
     if (!seen.has(k2)) {
       seen.add(k2);
-      ddg.push({ source: r, target: build.exitId, type: "DDG", var: "return" });
+      ddg.push({ source: r, target: data.exitId, type: "DDG", var: "return" });
     }
   }
-  for (const n of build.nodes) {
-    if (n.id === build.entryId) continue;
-    for (const d of facts.get(n.id)?.defs ?? []) {
+  for (const n of data.nodes) {
+    if (n.id === data.entryId) continue;
+    for (const d of effective.get(n.id)?.defs ?? []) {
       if (d.ref.baseKind !== "module") continue;
       const rendered = renderPath(d.ref);
-      const k2 = `${n.id}>${build.exitId}>${rendered}`;
+      const k2 = `${n.id}>${data.exitId}>${rendered}`;
       if (!seen.has(k2)) {
         seen.add(k2);
-        ddg.push({ source: n.id, target: build.exitId, type: "DDG", var: rendered });
+        ddg.push({ source: n.id, target: data.exitId, type: "DDG", var: rendered });
       }
     }
   }
 
-  const aliasRep = new Map<string, string>();
-  for (const f of facts.values()) {
-    for (const u of f.uses) aliasRep.set(u.key, find(u.key));
-    for (const d of f.defs) aliasRep.set(d.ref.key, find(d.ref.key));
-  }
-
-  return { ddg, facts, aliasRep, returnValueNodes };
-}
-
-function getBody(fn: Node): Node | undefined {
-  return (fn as unknown as { getBody?: () => Node | undefined }).getBody?.();
+  return { ddg, effective };
 }
