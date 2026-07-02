@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { buildProgramGraphs } from "./dataflow";
 import { selectProvider } from "./semantic_analysis";
 import { loadCache, saveCache } from "./utils";
 import { materialize } from "./build";
@@ -34,6 +35,13 @@ export function analyze(opts: AnalysisOptions): TSApplication {
     external_symbols: cg.external_symbols,
     synthesized_callables: cg.synthesized_callables,
   };
+
+  // Level 3: native program graphs (CFG/PDG/SDG). Strictly flag-gated so -a 1/-a 2 cost nothing;
+  // runs after the call graph because the SDG consumes its backfilled callee signatures.
+  if (opts.analysisLevel === 3) {
+    app.program_graphs = buildProgramGraphs({ project, symbol_table, opts, log });
+  }
+
   saveCache(cacheDir, { symbol_table, call_graph });
   return app;
 }

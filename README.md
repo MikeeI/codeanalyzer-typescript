@@ -158,8 +158,13 @@ Options:
                                  (default: "neo4j", env: NEO4J_PASSWORD)
   --neo4j-database <db>          Neo4j database name (env: NEO4J_DATABASE)
   -a, --analysis-level <n>       analysis depth: 1 = symbol table + tsc resolver
-                                 call graph + RTA (default); 2 = call graph
-                                 (default: "1")
+                                 call graph + RTA (default); 2 = call graph; 3 =
+                                 + program graphs (CFG/PDG/SDG) (default: "1")
+  --graphs <list>                level-3 graph sections to emit,
+                                 comma-separated: cfg | dfg | pdg | sdg
+                                 (default: all; requires -a 3)
+  --graph-field-depth <k>        access-path depth bound (k-limit) for level-3
+                                 dataflow (default: "3")
   -t, --target-files <paths...>  restrict analysis to specific files
                                  (incremental)
   --skip-tests                   skip test trees (default)
@@ -213,6 +218,12 @@ Options:
    cants --input ./my-ts-project --eager --cache-dir /path/to/custom-cache
    ```
 
+6. **Program graphs (level 3): CFG/PDG/SDG in `analysis.json`:**
+   ```sh
+   cants --input ./my-ts-project -a 3                    # full program_graphs section
+   cants --input ./my-ts-project -a 3 --graphs cfg,pdg   # scope the emitted graphs
+   ```
+
 ## Output targets
 
 `cants` builds one analysis in memory and can emit it three ways (`--emit`):
@@ -233,6 +244,44 @@ A `TSApplication` document — the canonical CLDK contract the Python SDK parses
 
 Caller- and callee-side identifiers come from a single signature canonicalizer, so call-graph
 `source`/`target` values byte-match the corresponding `symbol_table` / `external_symbols` keys.
+
+### Program graphs (`-a 3`)
+
+`--analysis-level 3` adds a `program_graphs` section to `analysis.json` — native, whole-program
+dependence graphs built in-process from the same ts-morph AST (no external engine), per the CLDK
+level-3 dataflow contract:
+
+```jsonc
+{
+  "program_graphs": {
+    "schema_version": "1.0.0",
+    "k_limit": 3,                    // access-path depth bound (--graph-field-depth)
+    "functions": {
+      "<signature>": {
+        "cfg": { "nodes": [...], "edges": [...] },   // exceptional control-flow graph
+        "pdg": { "edges": [...] }                    // CDG (control) + DDG (data) dependence
+      }
+    },
+    "sdg_edges": [ /* cross-function CALL / PARAM_IN / PARAM_OUT / SUMMARY edges */ ]
+  }
+}
+```
+
+Every graph node is keyed by `(signature, node_id)` — the same signature canonicalizer as the
+symbol table and call graph — so graphs, call edges, and callables all join. `--graphs
+cfg,dfg,pdg,sdg` scopes the emitted sections (default: all).
+
+**Substrate (locked in [issue #2](https://github.com/codellm-devkit/codeanalyzer-typescript/issues/2)):**
+the CFG and reaching-definitions are hand-built from the ts-morph AST; the call-graph oracle is
+the existing provenance-merged tsc ∪ Jelly graph; aliasing is a flow-insensitive copy-alias MVP
+(Jelly points-to-backed propagation is a staged upgrade). Function summaries are composed
+bottom-up over the SCC condensation of the call graph, with k-limited access paths; module
+globals ride the SDG as extra parameters. The analysis is deliberately sound-leaning and
+over-approximate; known unsoundness (dynamic `eval`, reflection/monkey-patching, npm-internal
+effects) is recorded in `.claude/SCHEMA_DECISIONS.md`. Backward slicing and taint run as queries
+over the SDG (slicing ships now inside the analyzer; the configurable taint pack is staged).
+
+Levels 1/2 are unaffected: nothing in level 3 runs unless `-a 3` is requested.
 
 ### Neo4j graph
 

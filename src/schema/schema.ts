@@ -395,6 +395,8 @@ export interface TSApplication {
   call_graph: TSCallEdge[];
   external_symbols: Record<string, TSExternalSymbol>;
   synthesized_callables: Record<string, TSSynthesizedCallable>;
+  /** Level-3 CFG/PDG/SDG section — present only at `-a 3` (see schema/graphs.ts). */
+  program_graphs?: import("./graphs").ProgramGraphs;
 }
 
 // ==============================================================================================

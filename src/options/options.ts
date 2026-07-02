@@ -1,3 +1,5 @@
+import type { GraphSelector } from "../schema";
+
 export type EmitTarget = "json" | "neo4j" | "schema";
 export type CallGraphProviderName = "union" | "tsc" | "jelly";
 
@@ -16,8 +18,15 @@ export interface AnalysisOptions {
   neo4jUser: string;
   neo4jPassword: string;
   neo4jDatabase: string | null;
-  /** Analysis depth requested by the caller (1 = symbol table + call graph [default]; 2 = call graph). */
-  analysisLevel: 1 | 2;
+  /**
+   * Analysis depth requested by the caller (1 = symbol table + call graph [default];
+   * 2 = call graph; 3 = + native program graphs — CFG/PDG/SDG in `program_graphs`).
+   */
+  analysisLevel: 1 | 2 | 3;
+  /** Which level-3 graph sections to emit (`--graphs`); only consulted at level 3. */
+  graphs: GraphSelector[];
+  /** k-limit for access-path depth in the level-3 dataflow (`--graph-field-depth`, default 3). */
+  graphFieldDepth: number;
   /** Restrict analysis to these files (project-relative or absolute). null ⇒ whole project. */
   targetFiles: string[] | null;
   /** Skip test trees (default true). */

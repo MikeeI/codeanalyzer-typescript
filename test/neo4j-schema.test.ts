@@ -28,7 +28,7 @@ function fixtureRows() {
   const opts: AnalysisOptions = {
     input: FIXTURE, output: null, emit: "json", appName: "sample-app",
     neo4jUri: null, neo4jUser: "neo4j", neo4jPassword: "", neo4jDatabase: null,
-    analysisLevel: 1, targetFiles: null, skipTests: true, eager: true,
+    analysisLevel: 1, graphs: ["cfg", "dfg", "pdg", "sdg"], graphFieldDepth: 3, targetFiles: null, skipTests: true, eager: true,
     noBuild: true, phantoms: true, callGraphProvider: "tsc", cacheDir, verbosity: 0,
   };
   try {

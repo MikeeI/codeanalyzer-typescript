@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { Command, Option } from "commander";
 import type { AnalysisOptions, CallGraphProviderName, EmitTarget } from "./options";
+import { ALL_GRAPHS, type GraphSelector } from "./schema";
 
 /**
  * Build the commander program. Shared by parseArgs and by the README generator
@@ -35,7 +36,16 @@ export function buildProgram(): Command {
         .default("neo4j"),
     )
     .addOption(new Option("--neo4j-database <db>", "Neo4j database name").env("NEO4J_DATABASE"))
-    .option("-a, --analysis-level <n>", "analysis depth: 1 = symbol table + tsc resolver call graph + RTA (default); 2 = call graph", "1")
+    .option(
+      "-a, --analysis-level <n>",
+      "analysis depth: 1 = symbol table + tsc resolver call graph + RTA (default); 2 = call graph; 3 = + program graphs (CFG/PDG/SDG)",
+      "1",
+    )
+    .option(
+      "--graphs <list>",
+      "level-3 graph sections to emit, comma-separated: cfg | dfg | pdg | sdg (default: all; requires -a 3)",
+    )
+    .option("--graph-field-depth <k>", "access-path depth bound (k-limit) for level-3 dataflow", "3")
     .option("-t, --target-files <paths...>", "restrict analysis to specific files (incremental)")
     .option("--skip-tests", "skip test trees (default)")
     .option("--include-tests", "include test trees")
@@ -61,7 +71,34 @@ export function parseArgs(argv: string[]): AnalysisOptions {
   program.parse(argv, { from: "user" });
   const o = program.opts();
 
-  const level = String(o.analysisLevel) === "2" ? 2 : 1;
+  const levelStr = String(o.analysisLevel);
+  if (!["1", "2", "3"].includes(levelStr)) {
+    program.error(`error: invalid --analysis-level '${levelStr}' (expected 1, 2, or 3)`);
+  }
+  const level = Number(levelStr) as 1 | 2 | 3;
+
+  // --graphs: strict validation (never a silent fallback), and only meaningful at -a 3.
+  let graphs: GraphSelector[] = [...ALL_GRAPHS];
+  if (o.graphs !== undefined) {
+    if (level !== 3) program.error("error: --graphs requires --analysis-level 3");
+    const requested = String(o.graphs)
+      .split(",")
+      .map((g) => g.trim())
+      .filter((g) => g.length > 0);
+    if (!requested.length) program.error("error: --graphs requires at least one of: cfg, dfg, pdg, sdg");
+    for (const g of requested) {
+      if (!(ALL_GRAPHS as string[]).includes(g)) {
+        program.error(`error: unknown --graphs value '${g}' (expected: cfg, dfg, pdg, sdg)`);
+      }
+    }
+    graphs = [...new Set(requested)] as GraphSelector[];
+  }
+
+  const kStr = String(o.graphFieldDepth);
+  const k = Number(kStr);
+  if (!Number.isInteger(k) || k < 1) {
+    program.error(`error: invalid --graph-field-depth '${kStr}' (expected a positive integer)`);
+  }
   const emit: EmitTarget = o.emit === "neo4j" ? "neo4j" : o.emit === "schema" ? "schema" : "json";
   // --emit schema is a static artifact and needs no project; every other target requires -i.
   if (emit !== "schema" && !o.input) program.error("required option '-i, --input <path>' not specified");
@@ -94,6 +131,8 @@ export function parseArgs(argv: string[]): AnalysisOptions {
     neo4jPassword: String(o.neo4jPassword),
     neo4jDatabase: o.neo4jDatabase ? String(o.neo4jDatabase) : null,
     analysisLevel: level,
+    graphs,
+    graphFieldDepth: k,
     targetFiles: targets,
     skipTests: o.includeTests ? false : true,
     eager: Boolean(o.eager),

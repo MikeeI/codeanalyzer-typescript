@@ -37,6 +37,8 @@ function optsFor(overrides: Partial<AnalysisOptions> = {}): AnalysisOptions {
     neo4jPassword: "",
     neo4jDatabase: null,
     analysisLevel: 1,
+    graphs: ["cfg", "dfg", "pdg", "sdg"],
+    graphFieldDepth: 3,
     targetFiles: null,
     skipTests: true,
     eager: true,
