@@ -26,7 +26,7 @@ export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
   // Level 3: post stage-1–4 graph extraction to the worker pool BEFORE the call-graph solve —
   // extraction doesn't need callee resolution, so the two run concurrently (the contract's
   // "points-to solve runs concurrently with stages 1–4") and join in buildProgramGraphs.
-  const extraction = opts.analysisLevel === 3 ? startExtraction(project, symbol_table, mat.tsConfigFilePath, opts, log) : null;
+  const extraction = opts.analysisLevel >= 3 ? startExtraction(project, symbol_table, mat.tsConfigFilePath, opts, log) : null;
 
   // Call graph via the selected provider (union of tsc+jelly by default; --tsc-only / jelly opt-in).
   const provider = selectProvider(opts.callGraphProvider);

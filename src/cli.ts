@@ -12,7 +12,7 @@ export function buildProgram(): Command {
   const program = new Command();
   program
     .name("cants")
-    .description("CLDK TypeScript analyzer — emits the canonical analysis.json (symbol table + resolver call graph), or a Neo4j graph.")
+    .description("CLDK TypeScript analyzer — emits the canonical schema-v2 CPG (symbol table → call graph → dataflow → SDG) as analysis.json, or a Neo4j graph.")
     .option("-i, --input <path>", "project root to analyze (not required for --emit schema)")
     .option("-o, --output <dir>", "output directory (omit ⇒ compact output to stdout)")
     .option("--emit <target>", "output target: json (analysis.json, default) | neo4j (graph.cypher or live push) | schema (the Neo4j schema.json contract)", "json")
@@ -38,12 +38,12 @@ export function buildProgram(): Command {
     .addOption(new Option("--neo4j-database <db>", "Neo4j database name").env("NEO4J_DATABASE"))
     .option(
       "-a, --analysis-level <n>",
-      "analysis depth: 1 = symbol table + tsc resolver call graph + RTA (default); 2 = call graph; 3 = + program graphs (CFG/PDG/SDG)",
+      "analysis depth: 1 = symbol table (default); 2 = + resolver call graph; 3 = + intraprocedural dataflow (cfg/cdg/ddg); 4 = + interprocedural SDG (param_in/param_out/summary)",
       "1",
     )
     .option(
       "--graphs <list>",
-      "level-3 graph sections to emit, comma-separated: cfg | dfg | pdg | sdg (default: all; requires -a 3)",
+      "dataflow sections to emit, comma-separated: cfg | dfg | pdg (require -a 3) | sdg (requires -a 4); default: all rungs at or below the level",
     )
     .option("--graph-field-depth <k>", "access-path depth bound (k-limit) for level-3 dataflow", "3")
     .option(
@@ -76,15 +76,33 @@ export function parseArgs(argv: string[]): AnalysisOptions {
   const o = program.opts();
 
   const levelStr = String(o.analysisLevel);
-  if (!["1", "2", "3"].includes(levelStr)) {
-    program.error(`error: invalid --analysis-level '${levelStr}' (expected 1, 2, or 3)`);
+  if (!["1", "2", "3", "4"].includes(levelStr)) {
+    program.error(`error: invalid --analysis-level '${levelStr}' (expected 1, 2, 3, or 4)`);
   }
-  const level = Number(levelStr) as 1 | 2 | 3;
+  let level = Number(levelStr) as 1 | 2 | 3 | 4;
 
-  // --graphs: strict validation (never a silent fallback), and only meaningful at -a 3.
-  let graphs: GraphSelector[] = [...ALL_GRAPHS];
+  // --emit target (needed early: the graph is always full-depth, so -a/--graphs are forbidden with it).
+  // Strict validation — an unrecognized value must error, never silently fall back to json.
+  const emitRaw = String(o.emit ?? "json");
+  if (!["json", "neo4j", "schema"].includes(emitRaw)) {
+    program.error(`error: invalid --emit '${emitRaw}' (expected: json, neo4j, schema)`);
+  }
+  const emit = emitRaw as EmitTarget;
+  if (emit === "neo4j") {
+    if (levelStr !== "1") {
+      program.error("error: --analysis-level does not apply to --emit neo4j; the graph is always projected at full depth");
+    }
+    if (o.graphs !== undefined) {
+      program.error("error: --graphs does not apply to --emit neo4j; the graph is always projected at full depth");
+    }
+    level = 4; // force max implemented depth so the projected graph is the full CPG
+  }
+
+  // --graphs: strict validation (never a silent fallback). Default = all rungs at or below the level;
+  // cfg/dfg/pdg require -a 3, sdg requires -a 4.
+  let graphs: GraphSelector[] = level >= 4 ? [...ALL_GRAPHS] : level === 3 ? ["cfg", "dfg", "pdg"] : [];
   if (o.graphs !== undefined) {
-    if (level !== 3) program.error("error: --graphs requires --analysis-level 3");
+    if (level < 3) program.error("error: --graphs requires --analysis-level 3 or 4");
     const requested = String(o.graphs)
       .split(",")
       .map((g) => g.trim())
@@ -94,6 +112,7 @@ export function parseArgs(argv: string[]): AnalysisOptions {
       if (!(ALL_GRAPHS as string[]).includes(g)) {
         program.error(`error: unknown --graphs value '${g}' (expected: cfg, dfg, pdg, sdg)`);
       }
+      if (g === "sdg" && level < 4) program.error("error: --graphs sdg requires --analysis-level 4");
     }
     graphs = [...new Set(requested)] as GraphSelector[];
   }
@@ -114,7 +133,6 @@ export function parseArgs(argv: string[]): AnalysisOptions {
     }
     jobs = j;
   }
-  const emit: EmitTarget = o.emit === "neo4j" ? "neo4j" : o.emit === "schema" ? "schema" : "json";
   // --emit schema is a static artifact and needs no project; every other target requires -i.
   if (emit !== "schema" && !o.input) program.error("required option '-i, --input <path>' not specified");
   const targets: string[] | null =
