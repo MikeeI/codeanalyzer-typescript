@@ -56,7 +56,11 @@ export const NODE_LABELS: NodeLabel[] = [
     label: "Application",
     mergeLabel: "Application",
     key: "id",
-    properties: { id: "string", schema_version: "string", language: "string", max_level: "integer", k_limit: "integer" },
+    properties: {
+      id: "string", schema_version: "string", language: "string", max_level: "integer", k_limit: "integer",
+      // Analyzer identity — mirrors the JSON envelope's `analyzer{name,version}` (issue #43).
+      name: "string", version: "string",
+    },
   },
   {
     label: "Module",
