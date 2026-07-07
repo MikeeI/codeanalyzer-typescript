@@ -4,7 +4,7 @@
 
 # codeanalyzer-typescript (`cants`)
 
-**A TypeScript/JavaScript static-analysis toolkit — the CLDK backend that emits a canonical symbol table and call graph, as `analysis.json` or a Neo4j property graph.**
+**A TypeScript/JavaScript static-analysis toolkit — the CLDK backend that emits the canonical schema-v2 Code Property Graph (symbol table → call graph → intraprocedural dataflow → interprocedural SDG), as `analysis.json` or a Neo4j property graph.**
 
 [![PyPI](https://img.shields.io/pypi/v/codeanalyzer-typescript?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/codeanalyzer-typescript/)
 [![Python](https://img.shields.io/pypi/pyversions/codeanalyzer-typescript?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/codeanalyzer-typescript/)
@@ -16,9 +16,10 @@
 ---
 
 `cants` is a static analyzer for TypeScript/JavaScript built on the TypeScript compiler (via
-[ts-morph](https://ts-morph.com/)). It produces the canonical CodeLLM-DevKit (CLDK)
-`analysis.json` — a symbol table plus a resolver-based call graph — and can project that same
-analysis into a **Neo4j property graph**. It is the TypeScript backend behind
+[ts-morph](https://ts-morph.com/)). It produces the canonical CodeLLM-DevKit (CLDK) **schema v2**
+— one additive Code Property Graph, built up level by level (symbol table → call graph →
+intraprocedural dataflow → interprocedural SDG) — as `analysis.json` and can project that same
+structure into a **Neo4j property graph**. It is the TypeScript backend behind
 [CLDK](https://github.com/codellm-devkit/python-sdk), mirroring its
 [Python](https://github.com/codellm-devkit/codeanalyzer-python) and
 [Java](https://github.com/codellm-devkit/codeanalyzer-java) siblings.
@@ -135,8 +136,8 @@ written to `analysis.json` (or `graph.cypher` for `--emit neo4j`) in that direct
 ```text
 Usage: cants [options]
 
-CLDK TypeScript analyzer — emits the canonical analysis.json (symbol table +
-resolver call graph), or a Neo4j graph.
+CLDK TypeScript analyzer — emits the canonical schema-v2 CPG (symbol table →
+call graph → dataflow → SDG) as analysis.json, or a Neo4j graph.
 
 Options:
   -i, --input <path>             project root to analyze (not required for
@@ -157,12 +158,13 @@ Options:
                                  visible in shell history / process list)
                                  (default: "neo4j", env: NEO4J_PASSWORD)
   --neo4j-database <db>          Neo4j database name (env: NEO4J_DATABASE)
-  -a, --analysis-level <n>       analysis depth: 1 = symbol table + tsc resolver
-                                 call graph + RTA (default); 2 = call graph; 3 =
-                                 + program graphs (CFG/PDG/SDG) (default: "1")
-  --graphs <list>                level-3 graph sections to emit,
-                                 comma-separated: cfg | dfg | pdg | sdg
-                                 (default: all; requires -a 3)
+  -a, --analysis-level <n>       analysis depth: 1 = symbol table (default); 2 =
+                                 + resolver call graph; 3 = + intraprocedural
+                                 dataflow (cfg/cdg/ddg); 4 = + interprocedural
+                                 SDG (param_in/param_out/summary) (default: "1")
+  --graphs <list>                dataflow sections to emit, comma-separated: cfg
+                                 | dfg | pdg (require -a 3) | sdg (requires -a
+                                 4); default: all rungs at or below the level
   --graph-field-depth <k>        access-path depth bound (k-limit) for level-3
                                  dataflow (default: "3")
   -j, --jobs <n>                 worker parallelism for level-3 graphs (default:
@@ -234,46 +236,49 @@ Options:
 
 ### `analysis.json` (default)
 
-A `TSApplication` document — the canonical CLDK contract the Python SDK parses:
+The **canonical schema v2** — one additive Code Property Graph: a containment tree of nodes
+(`id` / `kind` / `span` / children) with typed edge overlays. Analysis **levels** populate it more
+deeply; each level only ever *adds*.
 
 ```jsonc
 {
-  "symbol_table":     { /* file path → module (classes, interfaces, enums,
-                           type aliases, functions, namespaces, variables, …) */ },
-  "call_graph":       [ /* CALL_DEP edges: { source, target, type, weight,
-                           provenance, tags } keyed by callable signature */ ],
-  "external_symbols": { /* phantom stubs for call targets outside the project */ }
-}
-```
-
-Caller- and callee-side identifiers come from a single signature canonicalizer, so call-graph
-`source`/`target` values byte-match the corresponding `symbol_table` / `external_symbols` keys.
-
-### Program graphs (`-a 3`)
-
-`--analysis-level 3` adds a `program_graphs` section to `analysis.json` — native, whole-program
-dependence graphs built in-process from the same ts-morph AST (no external engine), per the CLDK
-level-3 dataflow contract:
-
-```jsonc
-{
-  "program_graphs": {
-    "schema_version": "1.0.0",
-    "k_limit": 3,                    // access-path depth bound (--graph-field-depth)
-    "functions": {
-      "<signature>": {
-        "cfg": { "nodes": [...], "edges": [...] },   // exceptional control-flow graph
-        "pdg": { "edges": [...] }                    // CDG (control) + DDG (data) dependence
-      }
-    },
-    "sdg_edges": [ /* cross-function CALL / PARAM_IN / PARAM_OUT / SUMMARY edges */ ]
+  "schema_version": "2.0.0", "language": "typescript", "max_level": 4, "k_limit": 3,
+  "application": {
+    "id": "can://typescript/<app>", "kind": "application",
+    "symbol_table": {                     // L1: the tree, keyed by file path
+      "<file>": { "kind": "module", "source": "…",
+        "types":     { /* class | interface | enum | type_alias | namespace nodes */ },
+        "functions": { /* callable nodes: { id, kind, span, body{}, cfg[], cdg[], ddg[], summary[] } */ },
+        "fields":    { /* module-level bindings */ } } },
+    "call_graph": [ /* L2: { src, dst, prov, weight } — callable → callable, can:// ids */ ],
+    "param_in":   [ /* L4: actual_in → formal_in, fully-qualified can://…@local ids */ ],
+    "param_out":  [ /* L4: formal_out → actual_out */ ]
   }
 }
 ```
 
-Every graph node is keyed by `(signature, node_id)` — the same signature canonicalizer as the
-symbol table and call graph — so graphs, call edges, and callables all join. `--graphs
-cfg,dfg,pdg,sdg` scopes the emitted sections (default: all).
+Each callable's `body{}` is keyed by local id (`line:col`, or `@entry`/`@formal_in:N`/… for
+synthetic vertices); intra-callable edge lists (`cfg`/`cdg`/`ddg`/`summary`) use those bare local
+ids, cross-callable lists use fully-qualified `can://…@local` ids. A single signature canonicalizer
+underlies every `can://` id, so call edges, dataflow edges, and tree nodes all join. The full model
+is `.claude/SCHEMA_DECISIONS.md` (§ "Schema v2 migration") and the CLDK `canonical-schema.md`.
+
+### Dataflow (`-a 3` intraprocedural, `-a 4` interprocedural)
+
+Native dependence graphs, built in-process from the same ts-morph AST (no external engine), grown
+**into the tree** (not a separate section):
+
+- **`-a 3`** completes each callable's `body{}` with statement nodes and hangs the intra-callable
+  edge lists `cfg` (exceptional control flow), `cdg` (control dependence), and `ddg` (data
+  dependence via reaching-definitions, `prov:["reaching-defs"]`) on the callable.
+- **`-a 4`** adds the synthetic `@formal_in:N` / `@formal_out` / `<L>/actual_in:N` / `<L>/actual_out`
+  vertices, the intra-caller `summary` edges, and the application-scope `param_in` / `param_out`
+  lists — the whole-program System Dependence Graph.
+
+`-a 3` implies `-a 2`; `-a 4` implies `-a 3`. `--graphs cfg,dfg,pdg,sdg` scopes which rungs emit
+(`cfg`/`dfg`/`pdg` require `-a 3`, `sdg` requires `-a 4`). `L1 ⊆ L2 ⊆ L3 ⊆ L4` is a monotonicity
+gate. Every node is addressed by its `can://…@local` id, so dataflow edges, call edges, and tree
+nodes all join.
 
 **Substrate (locked in [issue #2](https://github.com/codellm-devkit/codeanalyzer-typescript/issues/2)):**
 the CFG and reaching-definitions are hand-built from the ts-morph AST; the call-graph oracle is
@@ -282,8 +287,9 @@ the existing provenance-merged tsc ∪ Jelly graph; aliasing is a flow-insensiti
 bottom-up over the SCC condensation of the call graph, with k-limited access paths; module
 globals ride the SDG as extra parameters. The analysis is deliberately sound-leaning and
 over-approximate; known unsoundness (dynamic `eval`, reflection/monkey-patching, npm-internal
-effects) is recorded in `.claude/SCHEMA_DECISIONS.md`. Backward slicing and taint run as queries
-over the SDG (slicing ships now inside the analyzer; the configurable taint pack is staged).
+effects) is recorded in `.claude/SCHEMA_DECISIONS.md`. The analyzer is a **pure graph provider**:
+it emits the dependence-graph substrate (CFG/PDG/SDG + `summary` edges) and stops — backward
+slicing and taint are reachability *queries* over the SDG that live in the frontend SDK, not here.
 
 **Parallelism (`-j/--jobs`).** The pipeline implements the level-3 parallel execution model:
 stage-1–4 extraction fans out per callable over a Bun worker pool (partitioned by file) and is
@@ -301,9 +307,12 @@ Levels 1/2 are unaffected: nothing in level 3 runs unless `-a 3` is requested.
 
 ### Neo4j graph
 
-`--emit neo4j` projects the same analysis into a labeled property graph (declarations keyed by
-their signature under a shared `:Symbol` label; calls, imports, inheritance, decorators, and call
-sites as relationships):
+`--emit neo4j` projects the **same v2 tree** into a labeled property graph: every node keyed by its
+`can://` id under a shared `:CanNode` merge label (+ a specific kind label), containment as
+`HAS_MODULE`/`DECLARES`/`HAS_METHOD`/`HAS_FIELD`/`HAS_BODY_NODE` edges, and the overlays (`CALLS`,
+`CFG_NEXT`, `CDG`, `DDG`, `SUMMARY`, `PARAM_IN`, `PARAM_OUT`) as typed relationships. The graph is
+**always full-depth** — analysis levels gate the JSON path only, so combining `-a`/`--graphs` with
+`--emit neo4j` is an error:
 
 - **Without `--neo4j-uri`** — writes a self-contained `graph.cypher` (constraints + indexes, a
   scoped wipe, then batched `MERGE`s). Load it with `cypher-shell < graph.cypher`.

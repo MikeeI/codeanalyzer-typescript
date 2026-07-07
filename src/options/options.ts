@@ -19,10 +19,11 @@ export interface AnalysisOptions {
   neo4jPassword: string;
   neo4jDatabase: string | null;
   /**
-   * Analysis depth requested by the caller (1 = symbol table + call graph [default];
-   * 2 = call graph; 3 = + native program graphs — CFG/PDG/SDG in `program_graphs`).
+   * Analysis depth requested by the caller (schema v2): 1 = symbol table (+ call sites);
+   * 2 = + resolver call graph; 3 = + intraprocedural dataflow (cfg/cdg/ddg in the tree);
+   * 4 = + interprocedural SDG (param_in/param_out/summary + synthetic vertices).
    */
-  analysisLevel: 1 | 2 | 3;
+  analysisLevel: 1 | 2 | 3 | 4;
   /** Which level-3 graph sections to emit (`--graphs`); only consulted at level 3. */
   graphs: GraphSelector[];
   /** k-limit for access-path depth in the level-3 dataflow (`--graph-field-depth`, default 3). */

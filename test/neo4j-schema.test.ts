@@ -15,25 +15,25 @@ import {
   REL_TYPES,
   buildSchemaDocument,
   project,
-  twinOf,
-  withTwins,
 } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
+import { toV2Detailed } from "../src/schema/v2";
 
-const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
+const FIXTURE = path.resolve(import.meta.dir, "fixtures/dataflow-app");
 
 async function fixtureRows() {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-schema-test-"));
+  // --emit neo4j is always full-depth, so exercise every node/edge kind at L4.
   const opts: AnalysisOptions = {
-    input: FIXTURE, output: null, emit: "json", appName: "sample-app",
+    input: FIXTURE, output: null, emit: "neo4j", appName: "dataflow-app",
     neo4jUri: null, neo4jUser: "neo4j", neo4jPassword: "", neo4jDatabase: null,
-    analysisLevel: 1, graphs: ["cfg", "dfg", "pdg", "sdg"], graphFieldDepth: 3, jobs: 1,
+    analysisLevel: 4, graphs: ["cfg", "dfg", "pdg", "sdg"], graphFieldDepth: 3, jobs: 1,
     targetFiles: null, skipTests: true, eager: true,
-    noBuild: true, phantoms: true, callGraphProvider: "tsc", cacheDir, verbosity: 0,
+    noBuild: true, phantoms: true, callGraphProvider: "union", cacheDir, verbosity: 0,
   };
   try {
-    return project(await analyze(opts), "sample-app");
+    return project(toV2Detailed(await analyze(opts), opts).application);
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -43,17 +43,13 @@ const byLabel = new Map(NODE_LABELS.map((n) => [n.label, n]));
 const mergeOf = new Map(NODE_LABELS.map((n) => [n.label, n.mergeLabel]));
 const relByType = new Map(REL_TYPES.map((r) => [r.type, r]));
 const markers = new Set<string>(MARKER_LABELS);
-const twins = new Set<string>([
-  ...NODE_LABELS.map((n) => twinOf(n.label)),
-  ...MARKER_LABELS.map((m) => twinOf(m)),
-]);
 const mergeLabelsFor = (specifics: string[]) => new Set(specifics.map((s) => mergeOf.get(s)));
 
-/** The specific (schema) label for a node row: the non-merge, non-marker, non-twin label. */
+/** The specific (schema) label for a node row: the non-merge, non-marker label (`Application`
+ * has only its own label; every `CanNode` carries exactly one specific kind label). */
 function specificLabel(labels: string[]): string {
   const merge = labels[0];
-  if (merge !== "Symbol") return merge;
-  return labels.find((l) => l !== "Symbol" && !markers.has(l) && !twins.has(l)) ?? "Symbol";
+  return labels.find((l) => l !== merge && !markers.has(l)) ?? merge;
 }
 
 const rows = await fixtureRows();
@@ -68,7 +64,7 @@ describe("neo4j schema conformance", () => {
       expect(node.labels[0]).toBe(decl!.mergeLabel);
 
       for (const label of node.labels) {
-        const ok = label === decl!.mergeLabel || label === specific || markers.has(label) || twins.has(label);
+        const ok = label === decl!.mergeLabel || label === specific || markers.has(label);
         expect(ok, `unexpected label '${label}' on ${specific}`).toBe(true);
       }
       for (const key of Object.keys(node.props)) {
@@ -93,21 +89,5 @@ describe("neo4j schema conformance", () => {
     const onDisk = fs.readFileSync(path.resolve(import.meta.dir, "..", "schema.neo4j.json"), "utf8").trim();
     const fresh = JSON.stringify(buildSchemaDocument(), null, 2).trim();
     expect(onDisk).toBe(fresh);
-  });
-
-  test("every node carries exactly the TS twins of its base labels (1.1.0 dual-labeling)", () => {
-    for (const node of rows.nodes) {
-      const base = node.labels.filter((l) => !twins.has(l));
-      expect(new Set(node.labels), `bad twin set on ${node.labels.join(":")} ${node.value}`).toEqual(
-        new Set(withTwins(base)),
-      );
-      expect(twins.has(node.labels[0]), `merge label must stay bare: ${node.labels[0]}`).toBe(false);
-    }
-  });
-
-  test(":Application is stamped with the 1.1.0 contract version", () => {
-    const app = rows.nodes.find((n) => n.labels[0] === "Application");
-    expect(app).toBeDefined();
-    expect(app!.props.schema_version).toBe("1.1.0");
   });
 });
