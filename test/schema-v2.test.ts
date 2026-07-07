@@ -103,6 +103,12 @@ describe("schema v2 — L1 envelope", () => {
       expect(key).not.toContain("\\");
     }
   });
+
+  test("envelope carries analyzer{name,version}", () => {
+    expect(v2.analyzer?.name).toBe("codeanalyzer-typescript");
+    expect(typeof v2.analyzer?.version).toBe("string");
+    expect(v2.analyzer.version.length).toBeGreaterThan(0);
+  });
 });
 
 describe("schema v2 — L1 identity", () => {
