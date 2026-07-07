@@ -101,8 +101,8 @@ describe(":Application node carries analyzer identity (issue #43)", () => {
   test("version matches package.json (the same source the JSON envelope's analyzer.version uses)", () => {
     const appNode = rows.nodes.find((n) => n.labels.includes("Application"));
     expect(appNode, "no :Application node projected").toBeDefined();
-    expect(appNode!.props.version).toBe(pkg.version);
-    expect(appNode!.props.name).toBe("codeanalyzer-typescript");
+    expect(appNode!.props.analyzer_version).toBe(pkg.version);
+    expect(appNode!.props.analyzer_name).toBe("codeanalyzer-typescript");
   });
 });
 

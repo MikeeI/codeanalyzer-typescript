@@ -15,8 +15,8 @@
         "language": "string",
         "max_level": "integer",
         "k_limit": "integer",
-        "name": "string",
-        "version": "string"
+        "analyzer_name": "string",
+        "analyzer_version": "string"
       }
     },
     {
