@@ -47,7 +47,11 @@ export const TS_PREFIX = "TS";
 /** The TS-prefixed twin of a specific or marker label. */
 export const twinOf = (label: string): string => `${TS_PREFIX}${label}`;
 
-/** Expand a projection label set with its twins: order preserved, `Symbol` skipped, idempotent. */
+/**
+ * Expand a projection label set with its twins: order preserved, `Symbol` skipped, idempotent.
+ * Any label already starting with `TS` is treated as a twin and never re-prefixed — so no bare
+ * label may legitimately begin with `TS`.
+ */
 export function withTwins(labels: string[]): string[] {
   const out = [...labels];
   for (const l of labels) {
