@@ -11,7 +11,7 @@
  */
 
 import type { V2Application, V2BodyNode, V2Callable, V2External, V2Field, V2Module, V2Node, V2Root, V2Type } from "../../schema/v2";
-import { SCHEMA_VERSION, withTwins } from "./schema";
+import { SCHEMA_VERSION } from "./schema";
 import { type GraphRows, type NodeRef, type Props, RowBuilder, prune } from "./rows";
 
 /** The shared MERGE label + key every can://-id-keyed node is addressed by. */
@@ -24,28 +24,28 @@ function fq(callableId: string, localKey: string): string {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  module: "Module",
-  class: "Class",
-  interface: "Interface",
-  enum: "Enum",
-  type_alias: "TypeAlias",
-  namespace: "Namespace",
-  field: "Field",
-  external: "External",
-  function: "Callable",
-  method: "Callable",
-  constructor: "Callable",
-  getter: "Callable",
-  setter: "Callable",
-  arrow: "Callable",
-  function_expression: "Callable",
+  module: "TSModule",
+  class: "TSClass",
+  interface: "TSInterface",
+  enum: "TSEnum",
+  type_alias: "TSTypeAlias",
+  namespace: "TSNamespace",
+  field: "TSField",
+  external: "TSExternal",
+  function: "TSCallable",
+  method: "TSCallable",
+  constructor: "TSCallable",
+  getter: "TSCallable",
+  setter: "TSCallable",
+  arrow: "TSCallable",
+  function_expression: "TSCallable",
 };
 
 export function project(app: V2Application, _appName?: string): GraphRows {
-  const b = new RowBuilder(withTwins);
+  const b = new RowBuilder();
   const root: V2Root = app.application;
 
-  const appRef = b.node(["Application"], "id", root.id, prune({
+  const appRef = b.node(["Application", "TSApplication"], "id", root.id, prune({
     id: root.id,
     schema_version: SCHEMA_VERSION,
     language: app.language,
@@ -61,18 +61,18 @@ export function project(app: V2Application, _appName?: string): GraphRows {
 
   for (const mod of Object.values(root.symbol_table)) {
     const fileKey = moduleKeyOf(mod);
-    const modRef = b.node([CAN, "Module"], "id", mod.id, moduleProps(mod, fileKey));
-    b.edge("HAS_MODULE", appRef, modRef);
+    const modRef = b.node([CAN, "TSModule"], "id", mod.id, moduleProps(mod, fileKey));
+    b.edge("TS_HAS_MODULE", appRef, modRef);
     projectScope(b, mod, modRef, fileKey);
   }
 
   // External library targets (shared nodes — no _module).
   for (const ext of Object.values((root.external_symbols ?? {}) as Record<string, V2External>)) {
-    b.node([CAN, "External"], "id", ext.id, prune({ id: ext.id, kind: "external", name: ext.name, module: ext.module }));
+    b.node([CAN, "TSExternal"], "id", ext.id, prune({ id: ext.id, kind: "external", name: ext.name, module: ext.module }));
   }
   // First-party anonymous callbacks (edge endpoints the tree never names).
   for (const sc of Object.values((root.synthesized_callables ?? {}) as Record<string, V2Node>)) {
-    b.node([CAN, "AnonymousCallable"], "id", sc.id, prune({
+    b.node([CAN, "TSAnonymousCallable"], "id", sc.id, prune({
       id: sc.id, kind: "callable", name: str(sc.name), path: str(sc.path),
       start_line: spanLine(sc, "start"), start_column: spanCol(sc, "start"),
       _module: str(sc.path),
@@ -80,9 +80,9 @@ export function project(app: V2Application, _appName?: string): GraphRows {
   }
 
   // Overlay edges (application scope): the call graph + interprocedural param flow.
-  for (const e of root.call_graph) b.edge("CALLS", ref(e.src), ref(e.dst), prune({ weight: e.weight, prov: e.prov }));
-  for (const e of root.param_in) b.edge("PARAM_IN", ref(idOf(e.src)), ref(idOf(e.dst)), prune({ var: e.var ?? null }));
-  for (const e of root.param_out) b.edge("PARAM_OUT", ref(idOf(e.src)), ref(idOf(e.dst)), prune({ var: e.var ?? null }));
+  for (const e of root.call_graph) b.edge("TS_CALLS", ref(e.src), ref(e.dst), prune({ weight: e.weight, prov: e.prov }));
+  for (const e of root.param_in) b.edge("TS_PARAM_IN", ref(idOf(e.src)), ref(idOf(e.dst)), prune({ var: e.var ?? null }));
+  for (const e of root.param_out) b.edge("TS_PARAM_OUT", ref(idOf(e.src)), ref(idOf(e.dst)), prune({ var: e.var ?? null }));
 
   return b.finish();
 }
@@ -94,58 +94,58 @@ export function project(app: V2Application, _appName?: string): GraphRows {
 /** Walk a scope's child maps (module OR namespace: types + functions + fields). */
 function projectScope(b: RowBuilder, scope: V2Module | V2Type, parent: NodeRef, fileKey: string): void {
   for (const t of Object.values(scope.types ?? {})) projectType(b, t, parent, fileKey);
-  for (const c of Object.values(scope.functions ?? {})) projectCallable(b, c, parent, "DECLARES", fileKey);
+  for (const c of Object.values(scope.functions ?? {})) projectCallable(b, c, parent, "TS_DECLARES", fileKey);
   for (const f of Object.values(scope.fields ?? {})) projectField(b, f, parent, fileKey);
 }
 
 function projectType(b: RowBuilder, t: V2Type, parent: NodeRef, fileKey: string): void {
-  const label = KIND_LABEL[t.kind] ?? "Class";
+  const label = KIND_LABEL[t.kind] ?? "TSClass";
   const node = b.node([CAN, label], "id", t.id, typeProps(t, fileKey));
-  b.edge("DECLARES", parent, node);
+  b.edge("TS_DECLARES", parent, node);
   // Inheritance overlay — resolved-only (emit.ts already dropped unresolved/external supertypes);
   // the deferred gate is defense-in-depth against a resolved id that never materialized as a node.
-  for (const eid of t.extends_ids ?? []) b.edgeToSymbol("EXTENDS", node, eid);
-  for (const iid of t.implements_ids ?? []) b.edgeToSymbol("IMPLEMENTS", node, iid);
+  for (const eid of t.extends_ids ?? []) b.edgeToSymbol("TS_EXTENDS", node, eid);
+  for (const iid of t.implements_ids ?? []) b.edgeToSymbol("TS_IMPLEMENTS", node, iid);
   if (t.kind === "namespace") {
     projectScope(b, t, node, fileKey); // a namespace nests types/functions/fields
     return;
   }
-  for (const c of Object.values(t.callables ?? {})) projectCallable(b, c, node, "HAS_METHOD", fileKey);
+  for (const c of Object.values(t.callables ?? {})) projectCallable(b, c, node, "TS_HAS_METHOD", fileKey);
   for (const f of Object.values(t.fields ?? {})) projectField(b, f, node, fileKey);
 }
 
 function projectCallable(b: RowBuilder, c: V2Callable, owner: NodeRef, ownerRel: string, fileKey: string): void {
-  const node = b.node([CAN, "Callable"], "id", c.id, callableProps(c, fileKey));
+  const node = b.node([CAN, "TSCallable"], "id", c.id, callableProps(c, fileKey));
   b.edge(ownerRel, owner, node);
 
   // Body nodes (L1: call sites; L3+: statements + synthetic vertices) + their overlays.
   for (const [localKey, bn] of Object.entries(c.body ?? {})) {
     const bid = fq(c.id, localKey);
-    const bref = b.node([CAN, "BodyNode"], "id", bid, bodyProps(bn, bid, fileKey));
-    b.edge("HAS_BODY_NODE", node, bref);
-    if (typeof bn.callee === "string") b.edge("RESOLVES_TO", bref, ref(bn.callee));
+    const bref = b.node([CAN, "TSBodyNode"], "id", bid, bodyProps(bn, bid, fileKey));
+    b.edge("TS_HAS_BODY_NODE", node, bref);
+    if (typeof bn.callee === "string") b.edge("TS_RESOLVES_TO", bref, ref(bn.callee));
   }
   // kind-discriminated: a conditional's true/false pair between one endpoint pair must stay
   // two relationships, not one MERGE (issue #70).
-  for (const e of edges(c.cfg)) b.edge("CFG_NEXT", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)), prune({ kind: e.kind ?? null }), e.kind ?? "");
-  for (const e of edges(c.cdg)) b.edge("CDG", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)));
+  for (const e of edges(c.cfg)) b.edge("TS_CFG_NEXT", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)), prune({ kind: e.kind ?? null }), e.kind ?? "");
+  for (const e of edges(c.cdg)) b.edge("TS_CDG", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)));
   // (var, prov)-discriminated: the DDG legitimately carries several edges between one statement
   // pair (one per variable, and the prov split) — a plain endpoint-pair MERGE collapses them and
   // silently drops dependences (issue #70).
   for (const e of edges(c.ddg))
-    b.edge("DDG", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)), prune({ var: e.var ?? null, prov: e.prov ?? null }), `${e.var ?? ""}|${(e.prov ?? []).join(",")}`);
-  for (const e of edges(c.summary)) b.edge("SUMMARY", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)), prune({ var: e.var ?? null }));
+    b.edge("TS_DDG", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)), prune({ var: e.var ?? null, prov: e.prov ?? null }), `${e.var ?? ""}|${(e.prov ?? []).join(",")}`);
+  for (const e of edges(c.summary)) b.edge("TS_SUMMARY", ref(fq(c.id, e.src)), ref(fq(c.id, e.dst)), prune({ var: e.var ?? null }));
 
   // Nested callables (closures) + local classes.
-  for (const cc of Object.values(c.callables ?? {})) projectCallable(b, cc, node, "DECLARES", fileKey);
+  for (const cc of Object.values(c.callables ?? {})) projectCallable(b, cc, node, "TS_DECLARES", fileKey);
   for (const t of Object.values(c.types ?? {})) projectType(b, t, node, fileKey);
 }
 
 function projectField(b: RowBuilder, f: V2Field, owner: NodeRef, fileKey: string): void {
-  const node = b.node([CAN, "Field"], "id", f.id, prune({
+  const node = b.node([CAN, "TSField"], "id", f.id, prune({
     id: f.id, kind: "field", name: str(f.name), type: str((f as V2Node).type), ...span(f), _module: fileKey,
   }));
-  b.edge("HAS_FIELD", owner, node);
+  b.edge("TS_HAS_FIELD", owner, node);
 }
 
 // ----------------------------------------------------------------------------------------------

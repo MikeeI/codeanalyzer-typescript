@@ -1,5 +1,5 @@
 /**
- * #53 — checker-known external/library calls resolve to `:External` phantoms instead of being
+ * #53 — checker-known external/library calls resolve to `:TSExternal` phantoms instead of being
  * dropped. `resolveCalleeSignature` (src/schema/signatures.ts) already asks the ts-morph checker
  * for the callee's declaration; before this fix it only kept the result when the declaration lived
  * in-project (gated by `allSignatures`), silently discarding anything the checker resolved into

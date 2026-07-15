@@ -10,7 +10,11 @@
  * node keyed on its `can://` id under the shared MERGE label `CanNode` (one uniqueness constraint,
  * uniform edge endpoints), carrying a specific kind label; containment renders as HAS_x / DECLARES
  * edges and every typed overlay (call_graph, cfg/cdg/ddg/summary, param_in/param_out) as a typed
- * relationship. TypeScript uses UNPREFIXED relationship names.
+ * relationship. At 2.0.0 (issue #66) the vocabulary is namespaced for TypeScript: every specific
+ * node label is `TS`-prefixed (`TSModule`, `TSCallable`, ...; the shared MERGE labels `CanNode` and
+ * `Application` stay bare) and every relationship type is `TS_`-prefixed (`TS_CALLS`, ...) — this
+ * lets a shared multi-language database attribute TS-origin graph elements (epic #64) without a
+ * transitional dual-labeling step.
  *
  * SCHEMA_VERSION: MAJOR on a breaking change (renamed/removed label, relationship or key), MINOR
  * on additive. v2 is a MAJOR bump from v1 (keys moved signature→can:// id; labels reshaped).
@@ -38,34 +42,8 @@ export interface RelType {
 /** Labels layered onto a node in addition to its primary/specific label. */
 export const MARKER_LABELS = [] as const;
 
-/**
- * Language-namespace twins (transient dual-labeling, issue #65): every specific and marker label is
- * also stamped as `TS<Label>` so a shared multi-language database can attribute TS nodes (epic #64).
- * The shared MERGE labels (`Symbol`, `CanNode`) deliberately have NO twin — MERGE targets, keys and
- * constraints are unchanged. This dual-label state is transient; the vocabulary is finalized later.
- */
+/** The namespace prefix every specific node label and relationship type carries at 2.0.0 (#66). */
 export const TS_PREFIX = "TS";
-
-/** The TS-prefixed twin of a specific or marker label. */
-export const twinOf = (label: string): string => `${TS_PREFIX}${label}`;
-
-/** Shared merge labels never get a twin — they carry the constraint; node identity is unchanged. */
-const UNTWINNED = new Set(["Symbol", "CanNode"]);
-
-/**
- * Expand a projection label set with its twins: order preserved, shared merge labels skipped,
- * idempotent. Any label already starting with `TS` is treated as a twin and never re-prefixed — so
- * no bare label may legitimately begin with `TS`.
- */
-export function withTwins(labels: string[]): string[] {
-  const out = [...labels];
-  for (const l of labels) {
-    if (UNTWINNED.has(l) || l.startsWith(TS_PREFIX)) continue;
-    const t = twinOf(l);
-    if (!out.includes(t)) out.push(t);
-  }
-  return out;
-}
 
 /** The shared MERGE label for every can://-id-keyed node (one constraint; uniform edge endpoints). */
 const CAN = "CanNode";
@@ -75,7 +53,7 @@ const COMMON = { id: "string", kind: "string", _module: "string" } as const;
 
 export const NODE_LABELS: NodeLabel[] = [
   {
-    label: "Application",
+    label: "TSApplication",
     mergeLabel: "Application",
     key: "id",
     properties: {
@@ -87,13 +65,13 @@ export const NODE_LABELS: NodeLabel[] = [
     },
   },
   {
-    label: "Module",
+    label: "TSModule",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, name: "string", is_tsx: "boolean", is_declaration_file: "boolean", content_hash: "string", ...SPAN },
   },
   {
-    label: "Class",
+    label: "TSClass",
     mergeLabel: CAN,
     key: "id",
     properties: {
@@ -102,31 +80,31 @@ export const NODE_LABELS: NodeLabel[] = [
     },
   },
   {
-    label: "Interface",
+    label: "TSInterface",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, signature: "string", name: "string", base_classes: "string[]", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
   },
   {
-    label: "Enum",
+    label: "TSEnum",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, signature: "string", name: "string", is_const: "boolean", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
   },
   {
-    label: "TypeAlias",
+    label: "TSTypeAlias",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, signature: "string", name: "string", aliased_type: "string", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
   },
   {
-    label: "Namespace",
+    label: "TSNamespace",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, signature: "string", name: "string", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
   },
   {
-    label: "Callable",
+    label: "TSCallable",
     mergeLabel: CAN,
     key: "id",
     properties: {
@@ -136,18 +114,18 @@ export const NODE_LABELS: NodeLabel[] = [
       ...SPAN,
     },
   },
-  { label: "Field", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", type: "string", ...SPAN } },
+  { label: "TSField", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", type: "string", ...SPAN } },
   {
     // A statement / synthetic vertex inside a callable body (kind = statement|call|entry|exit|
     // formal_in|formal_out|actual_in|actual_out). `callee` on call nodes; `of`/`parent` on synthetics.
-    label: "BodyNode",
+    label: "TSBodyNode",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, of: "string", parent: "string", callee: "string", ...SPAN },
   },
-  { label: "External", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", module: "string" } },
+  { label: "TSExternal", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", module: "string" } },
   {
-    label: "AnonymousCallable",
+    label: "TSAnonymousCallable",
     mergeLabel: CAN,
     key: "id",
     properties: { ...COMMON, name: "string", path: "string", start_line: "integer", start_column: "integer" },
@@ -155,39 +133,39 @@ export const NODE_LABELS: NodeLabel[] = [
 ];
 
 export const REL_TYPES: RelType[] = [
-  { type: "HAS_MODULE", from: ["Application"], to: ["Module"], properties: {} },
+  { type: "TS_HAS_MODULE", from: ["TSApplication"], to: ["TSModule"], properties: {} },
   {
-    type: "DECLARES",
-    from: ["Module", "Namespace", "Callable"],
-    to: ["Class", "Interface", "Enum", "TypeAlias", "Namespace", "Callable"],
+    type: "TS_DECLARES",
+    from: ["TSModule", "TSNamespace", "TSCallable"],
+    to: ["TSClass", "TSInterface", "TSEnum", "TSTypeAlias", "TSNamespace", "TSCallable"],
     properties: {},
   },
-  { type: "HAS_METHOD", from: ["Class", "Interface"], to: ["Callable"], properties: {} },
-  { type: "HAS_FIELD", from: ["Module", "Class", "Interface", "Enum", "Namespace"], to: ["Field"], properties: {} },
-  { type: "HAS_BODY_NODE", from: ["Callable", "AnonymousCallable"], to: ["BodyNode"], properties: {} },
-  { type: "RESOLVES_TO", from: ["BodyNode"], to: ["Callable", "External", "AnonymousCallable"], properties: {} },
+  { type: "TS_HAS_METHOD", from: ["TSClass", "TSInterface"], to: ["TSCallable"], properties: {} },
+  { type: "TS_HAS_FIELD", from: ["TSModule", "TSClass", "TSInterface", "TSEnum", "TSNamespace"], to: ["TSField"], properties: {} },
+  { type: "TS_HAS_BODY_NODE", from: ["TSCallable", "TSAnonymousCallable"], to: ["TSBodyNode"], properties: {} },
+  { type: "TS_RESOLVES_TO", from: ["TSBodyNode"], to: ["TSCallable", "TSExternal", "TSAnonymousCallable"], properties: {} },
   {
-    type: "CALLS",
-    from: ["Callable", "AnonymousCallable"],
-    to: ["Callable", "External", "AnonymousCallable"],
+    type: "TS_CALLS",
+    from: ["TSCallable", "TSAnonymousCallable"],
+    to: ["TSCallable", "TSExternal", "TSAnonymousCallable"],
     properties: { weight: "integer", prov: "string[]" },
   },
-  // `_k` is the relationship-identity discriminant (internal): CFG_NEXT merges per `kind`
-  // (a conditional's true/false pair), DDG per `(var, prov)` (one dependence per variable, plus
+  // `_k` is the relationship-identity discriminant (internal): TS_CFG_NEXT merges per `kind`
+  // (a conditional's true/false pair), TS_DDG per `(var, prov)` (one dependence per variable, plus
   // the prov split) — a plain endpoint-pair MERGE would collapse legitimately-distinct edges
   // (issue #70).
-  { type: "CFG_NEXT", from: ["BodyNode"], to: ["BodyNode"], properties: { kind: "string", _k: "string" } },
-  { type: "CDG", from: ["BodyNode"], to: ["BodyNode"], properties: {} },
-  { type: "DDG", from: ["BodyNode"], to: ["BodyNode"], properties: { var: "string", prov: "string[]", _k: "string" } },
-  { type: "SUMMARY", from: ["BodyNode"], to: ["BodyNode"], properties: { var: "string" } },
-  { type: "PARAM_IN", from: ["BodyNode"], to: ["BodyNode"], properties: { var: "string" } },
-  { type: "PARAM_OUT", from: ["BodyNode"], to: ["BodyNode"], properties: { var: "string" } },
+  { type: "TS_CFG_NEXT", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { kind: "string", _k: "string" } },
+  { type: "TS_CDG", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: {} },
+  { type: "TS_DDG", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string", prov: "string[]", _k: "string" } },
+  { type: "TS_SUMMARY", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
+  { type: "TS_PARAM_IN", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
+  { type: "TS_PARAM_OUT", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
   // Inheritance, projected from the `extends_ids`/`implements_ids` node props (schema/v2/emit.ts) —
-  // resolved-only: an unresolved (external/library) supertype never reaches here. A `to` of `Class`
+  // resolved-only: an unresolved (external/library) supertype never reaches here. A `to` of `TSClass`
   // covers TS's `implements SomeClass` (structural, not just interfaces); an interface may itself
-  // `extends` a class's instance type, hence `EXTENDS` also allows an `Interface` source.
-  { type: "EXTENDS", from: ["Class", "Interface"], to: ["Class", "Interface"], properties: {} },
-  { type: "IMPLEMENTS", from: ["Class"], to: ["Interface", "Class"], properties: {} },
+  // `extends` a class's instance type, hence `TS_EXTENDS` also allows a `TSInterface` source.
+  { type: "TS_EXTENDS", from: ["TSClass", "TSInterface"], to: ["TSClass", "TSInterface"], properties: {} },
+  { type: "TS_IMPLEMENTS", from: ["TSClass"], to: ["TSInterface", "TSClass"], properties: {} },
 ];
 
 // ----------------------------------------------------------------------------------------------
@@ -214,7 +192,7 @@ export const CONSTRAINTS: readonly string[] = uniquenessConstraints();
 
 /** Curated performance indexes (not 1:1 with labels, so declared explicitly). */
 export const INDEXES: readonly string[] = [
-  "CREATE INDEX callable_name IF NOT EXISTS FOR (c:Callable) ON (c.name)",
+  "CREATE INDEX callable_name IF NOT EXISTS FOR (c:TSCallable) ON (c.name)",
   "CREATE INDEX cannode_kind IF NOT EXISTS FOR (n:CanNode) ON (n.kind)",
 ];
 
@@ -226,16 +204,6 @@ export interface SchemaDocument {
   relationship_types: RelType[];
   constraints: readonly string[];
   indexes: readonly string[];
-  /** Specific/marker label → its TS-prefixed twin (both are present on every emitted node). */
-  label_twins: Record<string, string>;
-}
-
-/** One twin per specific label + per marker label — derived from the catalogs, never drifts. */
-function labelTwins(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const n of NODE_LABELS) out[n.label] = twinOf(n.label);
-  for (const m of MARKER_LABELS) out[m] = twinOf(m);
-  return out;
 }
 
 /** Build the full machine-readable schema document emitted by `--emit schema`. */
@@ -248,6 +216,5 @@ export function buildSchemaDocument(): SchemaDocument {
     relationship_types: REL_TYPES,
     constraints: CONSTRAINTS,
     indexes: INDEXES,
-    label_twins: labelTwins(),
   };
 }

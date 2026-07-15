@@ -100,7 +100,7 @@ containerSuite("neo4j bolt writer", () => {
       // merge label — Application is the only node kind that sits outside it).
       const canNode = await num("MATCH (s:CanNode) RETURN count(s)");
       const kinds = await num(
-        "MATCH (s:CanNode) WHERE s:Module OR s:Class OR s:Interface OR s:Enum OR s:TypeAlias OR s:Namespace OR s:Callable OR s:Field OR s:BodyNode OR s:External OR s:AnonymousCallable RETURN count(s)",
+        "MATCH (s:CanNode) WHERE s:TSModule OR s:TSClass OR s:TSInterface OR s:TSEnum OR s:TSTypeAlias OR s:TSNamespace OR s:TSCallable OR s:TSField OR s:TSBodyNode OR s:TSExternal OR s:TSAnonymousCallable RETURN count(s)",
       );
       expect(canNode).toBeGreaterThan(0);
       expect(kinds).toBe(canNode);
@@ -112,7 +112,7 @@ containerSuite("neo4j bolt writer", () => {
       // A known resolved call edge from the fixture (index.ts calls services.announce).
       expect(
         await num(
-          "MATCH (:Callable)-[:CALLS]->(t:Callable {name:$n}) RETURN count(*)",
+          "MATCH (:TSCallable)-[:TS_CALLS]->(t:TSCallable {name:$n}) RETURN count(*)",
           { n: "announce" },
         ),
       ).toBeGreaterThan(0);
@@ -144,7 +144,7 @@ containerSuite("neo4j bolt writer", () => {
       // The victim's nodes are gone.
       expect(await num("MATCH (n {_module:$m}) RETURN count(n)", { m: victim })).toBe(0);
 
-      // The surviving module-scoped graph matches the reduced projection. (Shared :External/:Package
+      // The surviving module-scoped graph matches the reduced projection. (Shared :TSExternal
       // nodes are MERGE-only and intentionally never pruned, so we compare only _module-tagged nodes.)
       const moduleScoped = rows.nodes.filter((n) => "_module" in n.props).length;
       expect(await num("MATCH (n) WHERE n._module IS NOT NULL RETURN count(n)")).toBe(moduleScoped);

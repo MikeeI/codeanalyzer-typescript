@@ -11,8 +11,8 @@
  *  5. on a FULL run only, prune modules whose source file vanished.
  *
  * Nodes are MERGE-upserted, never blindly deleted, so a declaration another (unchanged) module
- * still references survives and its incoming edges stay valid. `:External`/`:Package`/`:Decorator`
- * are shared (no `_module`) and are MERGE-only.
+ * still references survives and its incoming edges stay valid. `:TSExternal` nodes are shared (no
+ * `_module`) and are MERGE-only.
  *
  * `neo4j-driver` is imported dynamically so it stays off the hot path and out of the default
  * (json) output entirely.
@@ -30,7 +30,7 @@ export interface BoltConfig {
   database: string | null;
 }
 
-const DESCENDANTS = "[:DECLARES|HAS_METHOD|HAS_FIELD|HAS_BODY_NODE*1..]";
+const DESCENDANTS = "[:TS_DECLARES|TS_HAS_METHOD|TS_HAS_FIELD|TS_HAS_BODY_NODE*1..]";
 const BATCH = 1000;
 
 export async function boltWriter(
@@ -68,7 +68,7 @@ export async function boltWriter(
     // 2. diff content_hash.
     const dbHash = new Map<string, string | null>();
     await withSession(session, async (s) => {
-      const res = await s.run("MATCH (m:Module) RETURN m._module AS k, m.content_hash AS h");
+      const res = await s.run("MATCH (m:TSModule) RETURN m._module AS k, m.content_hash AS h");
       for (const rec of res.records) dbHash.set(rec.get("k"), rec.get("h"));
     });
     const changed = new Set<string>();
@@ -112,7 +112,7 @@ export async function boltWriter(
       const present = [...byModule.keys()];
       await withSession(session, async (s) => {
         const res = await s.run(
-          `MATCH (m:Module) WHERE NOT m._module IN $present ` +
+          `MATCH (m:TSModule) WHERE NOT m._module IN $present ` +
             `OPTIONAL MATCH (m)-${DESCENDANTS}->(x) DETACH DELETE x, m RETURN count(m) AS pruned`,
           { present },
         );
@@ -193,8 +193,8 @@ function bucket<K, V>(map: Map<K, V[]>, key: K): V[] {
 }
 
 function hashOf(nodes: NodeRow[], _fileKey: string): string | undefined {
-  // Every node in `nodes` shares the same _module; the Module row (labels include "Module") carries the hash.
-  const mod = nodes.find((n) => n.labels.includes("Module"));
+  // Every node in `nodes` shares the same _module; the Module row (labels include "TSModule") carries the hash.
+  const mod = nodes.find((n) => n.labels.includes("TSModule"));
   const h = mod?.props.content_hash;
   return typeof h === "string" ? h : undefined;
 }

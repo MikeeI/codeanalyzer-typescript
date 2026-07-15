@@ -16,8 +16,6 @@ import {
   REL_TYPES,
   buildSchemaDocument,
   project,
-  twinOf,
-  withTwins,
 } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
@@ -46,17 +44,13 @@ const byLabel = new Map(NODE_LABELS.map((n) => [n.label, n]));
 const mergeOf = new Map(NODE_LABELS.map((n) => [n.label, n.mergeLabel]));
 const relByType = new Map(REL_TYPES.map((r) => [r.type, r]));
 const markers = new Set<string>(MARKER_LABELS);
-const twins = new Set<string>([
-  ...NODE_LABELS.map((n) => twinOf(n.label)),
-  ...MARKER_LABELS.map((m) => twinOf(m)),
-]);
 const mergeLabelsFor = (specifics: string[]) => new Set(specifics.map((s) => mergeOf.get(s)));
 
-/** The specific (schema) label for a node row: the non-merge, non-marker, non-twin label
- * (`Application` has only its own label; every `CanNode` carries exactly one specific kind label). */
+/** The specific (schema) label for a node row: the non-merge, non-marker label (`TSApplication`
+ * carries `Application` as its merge label; every `CanNode` carries exactly one specific kind label). */
 function specificLabel(labels: string[]): string {
   const merge = labels[0];
-  return labels.find((l) => l !== merge && !markers.has(l) && !twins.has(l)) ?? merge;
+  return labels.find((l) => l !== merge && !markers.has(l)) ?? merge;
 }
 
 const rows = await fixtureRows();
@@ -71,7 +65,7 @@ describe("neo4j schema conformance", () => {
       expect(node.labels[0]).toBe(decl!.mergeLabel);
 
       for (const label of node.labels) {
-        const ok = label === decl!.mergeLabel || label === specific || markers.has(label) || twins.has(label);
+        const ok = label === decl!.mergeLabel || label === specific || markers.has(label);
         expect(ok, `unexpected label '${label}' on ${specific}`).toBe(true);
       }
       for (const key of Object.keys(node.props)) {
@@ -107,15 +101,14 @@ describe("neo4j schema conformance", () => {
     }
   });
 
-  test("every node carries exactly the TS twins of its base labels (transient dual-labeling)", () => {
+  test("2.0.0 emits only TS-prefixed specific labels and TS_ rel types (#66)", () => {
     for (const node of rows.nodes) {
-      const base = node.labels.filter((l) => !twins.has(l));
-      expect(new Set(node.labels), `bad twin set on ${node.labels.join(":")} ${node.value}`).toEqual(
-        new Set(withTwins(base)),
-      );
-      // the shared merge label (`CanNode` / `Application`) stays bare at index 0.
-      expect(twins.has(node.labels[0]), `merge label must stay bare: ${node.labels[0]}`).toBe(false);
+      for (const l of node.labels) {
+        const ok = l === "CanNode" || l === "Application" || l.startsWith("TS");
+        expect(ok, `bare label leaked: ${l}`).toBe(true);
+      }
     }
+    for (const edge of rows.edges) expect(edge.type.startsWith("TS_"), `bare rel leaked: ${edge.type}`).toBe(true);
   });
 });
 
@@ -139,8 +132,8 @@ describe(":Application node carries analyzer identity (issue #43)", () => {
 
 describe("neo4j inheritance edges (issue #33)", () => {
   test("EXTENDS and IMPLEMENTS are declared in the schema catalog", () => {
-    expect(relByType.has("EXTENDS")).toBe(true);
-    expect(relByType.has("IMPLEMENTS")).toBe(true);
+    expect(relByType.has("TS_EXTENDS")).toBe(true);
+    expect(relByType.has("TS_IMPLEMENTS")).toBe(true);
   });
 
   function nodeBySignature(signature: string) {
@@ -157,8 +150,8 @@ describe("neo4j inheritance edges (issue #33)", () => {
     expect(shape, "Shape node").toBeDefined();
     expect(labeled, "Labeled node").toBeDefined();
 
-    const ext = rows.edges.filter((e) => e.type === "EXTENDS");
-    const impl = rows.edges.filter((e) => e.type === "IMPLEMENTS");
+    const ext = rows.edges.filter((e) => e.type === "TS_EXTENDS");
+    const impl = rows.edges.filter((e) => e.type === "TS_IMPLEMENTS");
     expect(ext.length).toBeGreaterThan(0);
     expect(impl.length).toBeGreaterThan(0);
 
@@ -178,10 +171,10 @@ describe("neo4j inheritance edges (issue #33)", () => {
     const shape = nodeBySignature("src/hierarchy.Shape");
     expect(coloredShape, "ColoredShape node").toBeDefined();
     expect(shape, "Shape node").toBeDefined();
-    expect(specificLabel(coloredShape!.labels)).toBe("Interface");
-    expect(specificLabel(shape!.labels)).toBe("Interface");
+    expect(specificLabel(coloredShape!.labels)).toBe("TSInterface");
+    expect(specificLabel(shape!.labels)).toBe("TSInterface");
 
-    const ext = rows.edges.filter((e) => e.type === "EXTENDS");
+    const ext = rows.edges.filter((e) => e.type === "TS_EXTENDS");
     expect(ext.some((e) => e.from.value === coloredShape!.value && e.to.value === shape!.value)).toBe(true);
 
     const nodeValues = new Set(rows.nodes.map((n) => n.value));

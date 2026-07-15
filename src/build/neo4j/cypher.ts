@@ -37,8 +37,8 @@ function wipe(appId: string): string {
   const id = cypherValue(appId);
   return [
     `MATCH (a:Application {id: ${id}})`,
-    "OPTIONAL MATCH (a)-[:HAS_MODULE]->(m:Module)",
-    "OPTIONAL MATCH (m)-[:DECLARES|HAS_METHOD|HAS_FIELD|HAS_BODY_NODE*1..]->(x)",
+    "OPTIONAL MATCH (a)-[:TS_HAS_MODULE]->(m:TSModule)",
+    "OPTIONAL MATCH (m)-[:TS_DECLARES|TS_HAS_METHOD|TS_HAS_FIELD|TS_HAS_BODY_NODE*1..]->(x)",
     "DETACH DELETE x, m, a;",
   ].join("\n");
 }

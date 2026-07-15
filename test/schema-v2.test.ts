@@ -727,13 +727,13 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
 
   test("typed overlay relationships match their JSON edge-list length 1:1", () => {
     const callables = allCallables(monoApp4.application);
-    expect(relCount(monoRows, "CALLS")).toBe(monoApp4.application.call_graph.length);
-    expect(relCount(monoRows, "PARAM_IN")).toBe(monoApp4.application.param_in.length);
-    expect(relCount(monoRows, "PARAM_OUT")).toBe(monoApp4.application.param_out.length);
-    expect(relCount(monoRows, "CFG_NEXT")).toBe(callables.reduce((n, c) => n + (c.cfg?.length ?? 0), 0));
-    expect(relCount(monoRows, "CDG")).toBe(callables.reduce((n, c) => n + (c.cdg?.length ?? 0), 0));
-    expect(relCount(monoRows, "DDG")).toBe(callables.reduce((n, c) => n + (c.ddg?.length ?? 0), 0));
-    expect(relCount(monoRows, "SUMMARY")).toBe(callables.reduce((n, c) => n + (c.summary?.length ?? 0), 0));
+    expect(relCount(monoRows, "TS_CALLS")).toBe(monoApp4.application.call_graph.length);
+    expect(relCount(monoRows, "TS_PARAM_IN")).toBe(monoApp4.application.param_in.length);
+    expect(relCount(monoRows, "TS_PARAM_OUT")).toBe(monoApp4.application.param_out.length);
+    expect(relCount(monoRows, "TS_CFG_NEXT")).toBe(callables.reduce((n, c) => n + (c.cfg?.length ?? 0), 0));
+    expect(relCount(monoRows, "TS_CDG")).toBe(callables.reduce((n, c) => n + (c.cdg?.length ?? 0), 0));
+    expect(relCount(monoRows, "TS_DDG")).toBe(callables.reduce((n, c) => n + (c.ddg?.length ?? 0), 0));
+    expect(relCount(monoRows, "TS_SUMMARY")).toBe(callables.reduce((n, c) => n + (c.summary?.length ?? 0), 0));
   });
 
   test("containment relationships (HAS_*/DECLARES) match tree cardinality, not a JSON edge-list", () => {
@@ -745,7 +745,7 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     // `extends_ids`/`implements_ids` props respectively — but they are not containment either, so
     // they're deliberately excluded from this invariant too; see the dedicated tests below and the
     // exhaustive edge-accounting test that folds every relationship family back into one total.)
-    const containment = ["HAS_MODULE", "DECLARES", "HAS_METHOD", "HAS_FIELD", "HAS_BODY_NODE"];
+    const containment = ["TS_HAS_MODULE", "TS_DECLARES", "TS_HAS_METHOD", "TS_HAS_FIELD", "TS_HAS_BODY_NODE"];
     const containmentEdges = containment.reduce((n, t) => n + relCount(monoRows, t), 0);
     const externalCount = Object.keys(monoApp4.application.external_symbols ?? {}).length;
     const synthCount = Object.keys(monoApp4.application.synthesized_callables ?? {}).length;
@@ -760,8 +760,8 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     // kinds — guards against a vacuous 0 === 0 pass if the fixture ever loses its heritage.
     expect(extendsCount).toBeGreaterThan(0);
     expect(implementsCount).toBeGreaterThan(0);
-    expect(relCount(monoRows, "EXTENDS")).toBe(extendsCount);
-    expect(relCount(monoRows, "IMPLEMENTS")).toBe(implementsCount);
+    expect(relCount(monoRows, "TS_EXTENDS")).toBe(extendsCount);
+    expect(relCount(monoRows, "TS_IMPLEMENTS")).toBe(implementsCount);
   });
 
   test("every projected edge is accounted for: typed overlay + containment + RESOLVES_TO + EXTENDS/IMPLEMENTS sums to the total", () => {
@@ -770,19 +770,19 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     // project.ts ever grows a new relationship family without this test learning about it, the two
     // sides diverge and the gate fails, instead of silently passing on an incomplete accounting.
     const typedOverlay =
-      relCount(monoRows, "CALLS") +
-      relCount(monoRows, "PARAM_IN") +
-      relCount(monoRows, "PARAM_OUT") +
-      relCount(monoRows, "CFG_NEXT") +
-      relCount(monoRows, "CDG") +
-      relCount(monoRows, "DDG") +
-      relCount(monoRows, "SUMMARY");
-    const containment = ["HAS_MODULE", "DECLARES", "HAS_METHOD", "HAS_FIELD", "HAS_BODY_NODE"].reduce(
+      relCount(monoRows, "TS_CALLS") +
+      relCount(monoRows, "TS_PARAM_IN") +
+      relCount(monoRows, "TS_PARAM_OUT") +
+      relCount(monoRows, "TS_CFG_NEXT") +
+      relCount(monoRows, "TS_CDG") +
+      relCount(monoRows, "TS_DDG") +
+      relCount(monoRows, "TS_SUMMARY");
+    const containment = ["TS_HAS_MODULE", "TS_DECLARES", "TS_HAS_METHOD", "TS_HAS_FIELD", "TS_HAS_BODY_NODE"].reduce(
       (n, t) => n + relCount(monoRows, t),
       0,
     );
-    const resolvesTo = relCount(monoRows, "RESOLVES_TO");
-    const heritage = relCount(monoRows, "EXTENDS") + relCount(monoRows, "IMPLEMENTS");
+    const resolvesTo = relCount(monoRows, "TS_RESOLVES_TO");
+    const heritage = relCount(monoRows, "TS_EXTENDS") + relCount(monoRows, "TS_IMPLEMENTS");
     expect(resolvesTo).toBe(resolvesToCount(monoApp4));
     expect(typedOverlay + containment + resolvesTo + heritage).toBe(monoRows.edges.length);
   });
@@ -793,7 +793,7 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     // relationship per distinct (from, to, key) tuple. If any row lacked a key, or two parallel
     // rows shared one, MERGE would silently collapse them and row-level parity would never notice.
     // This pins the discriminant on the real L4 projection, not a synthetic fixture.
-    for (const type of ["DDG", "CFG_NEXT"] as const) {
+    for (const type of ["TS_DDG", "TS_CFG_NEXT"] as const) {
       const rows = monoRows.edges.filter((e) => e.type === type);
       expect(rows.length).toBeGreaterThan(0);
       expect(rows.every((e) => e.key !== undefined)).toBe(true);
@@ -803,7 +803,7 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     // Non-vacuous: the fixture really produces parallel edges between one endpoint pair for both
     // families (per-var DDG; a conditional's true/false CFG_NEXT pair) — the collapse the `_k`
     // discriminant exists to prevent. Guards against the fixture ever losing that shape.
-    for (const type of ["DDG", "CFG_NEXT"] as const) {
+    for (const type of ["TS_DDG", "TS_CFG_NEXT"] as const) {
       const pairs = new Map<string, number>();
       for (const e of monoRows.edges.filter((e) => e.type === type)) {
         const pair = `${e.from.value} ${e.to.value}`;

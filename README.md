@@ -308,9 +308,10 @@ Levels 1/2 are unaffected: nothing in level 3 runs unless `-a 3` is requested.
 ### Neo4j graph
 
 `--emit neo4j` projects the **same v2 tree** into a labeled property graph: every node keyed by its
-`can://` id under a shared `:CanNode` merge label (+ a specific kind label), containment as
-`HAS_MODULE`/`DECLARES`/`HAS_METHOD`/`HAS_FIELD`/`HAS_BODY_NODE` edges, and the overlays (`CALLS`,
-`CFG_NEXT`, `CDG`, `DDG`, `SUMMARY`, `PARAM_IN`, `PARAM_OUT`) as typed relationships. The graph is
+`can://` id under a shared `:CanNode` merge label (+ a `TS`-prefixed specific kind label, e.g.
+`:TSModule`, `:TSCallable`), containment as `TS_HAS_MODULE`/`TS_DECLARES`/`TS_HAS_METHOD`/
+`TS_HAS_FIELD`/`TS_HAS_BODY_NODE` edges, and the overlays (`TS_CALLS`, `TS_CFG_NEXT`, `TS_CDG`,
+`TS_DDG`, `TS_SUMMARY`, `TS_PARAM_IN`, `TS_PARAM_OUT`) as typed relationships. The graph is
 **always full-depth** — analysis levels gate the JSON path only, so combining `-a`/`--graphs` with
 `--emit neo4j` is an error:
 

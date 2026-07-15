@@ -4,7 +4,7 @@
   "marker_labels": [],
   "node_labels": [
     {
-      "label": "Application",
+      "label": "TSApplication",
       "mergeLabel": "Application",
       "key": "id",
       "properties": {
@@ -18,7 +18,7 @@
       }
     },
     {
-      "label": "Module",
+      "label": "TSModule",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -34,7 +34,7 @@
       }
     },
     {
-      "label": "Class",
+      "label": "TSClass",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -53,7 +53,7 @@
       }
     },
     {
-      "label": "Interface",
+      "label": "TSInterface",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -70,7 +70,7 @@
       }
     },
     {
-      "label": "Enum",
+      "label": "TSEnum",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -87,7 +87,7 @@
       }
     },
     {
-      "label": "TypeAlias",
+      "label": "TSTypeAlias",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -104,7 +104,7 @@
       }
     },
     {
-      "label": "Namespace",
+      "label": "TSNamespace",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -120,7 +120,7 @@
       }
     },
     {
-      "label": "Callable",
+      "label": "TSCallable",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -145,7 +145,7 @@
       }
     },
     {
-      "label": "Field",
+      "label": "TSField",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -159,7 +159,7 @@
       }
     },
     {
-      "label": "BodyNode",
+      "label": "TSBodyNode",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -174,7 +174,7 @@
       }
     },
     {
-      "label": "External",
+      "label": "TSExternal",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -186,7 +186,7 @@
       }
     },
     {
-      "label": "AnonymousCallable",
+      "label": "TSAnonymousCallable",
       "mergeLabel": "CanNode",
       "key": "id",
       "properties": {
@@ -202,90 +202,90 @@
   ],
   "relationship_types": [
     {
-      "type": "HAS_MODULE",
+      "type": "TS_HAS_MODULE",
       "from": [
-        "Application"
+        "TSApplication"
       ],
       "to": [
-        "Module"
+        "TSModule"
       ],
       "properties": {}
     },
     {
-      "type": "DECLARES",
+      "type": "TS_DECLARES",
       "from": [
-        "Module",
-        "Namespace",
-        "Callable"
+        "TSModule",
+        "TSNamespace",
+        "TSCallable"
       ],
       "to": [
-        "Class",
-        "Interface",
-        "Enum",
-        "TypeAlias",
-        "Namespace",
-        "Callable"
+        "TSClass",
+        "TSInterface",
+        "TSEnum",
+        "TSTypeAlias",
+        "TSNamespace",
+        "TSCallable"
       ],
       "properties": {}
     },
     {
-      "type": "HAS_METHOD",
+      "type": "TS_HAS_METHOD",
       "from": [
-        "Class",
-        "Interface"
+        "TSClass",
+        "TSInterface"
       ],
       "to": [
-        "Callable"
+        "TSCallable"
       ],
       "properties": {}
     },
     {
-      "type": "HAS_FIELD",
+      "type": "TS_HAS_FIELD",
       "from": [
-        "Module",
-        "Class",
-        "Interface",
-        "Enum",
-        "Namespace"
+        "TSModule",
+        "TSClass",
+        "TSInterface",
+        "TSEnum",
+        "TSNamespace"
       ],
       "to": [
-        "Field"
+        "TSField"
       ],
       "properties": {}
     },
     {
-      "type": "HAS_BODY_NODE",
+      "type": "TS_HAS_BODY_NODE",
       "from": [
-        "Callable",
-        "AnonymousCallable"
+        "TSCallable",
+        "TSAnonymousCallable"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {}
     },
     {
-      "type": "RESOLVES_TO",
+      "type": "TS_RESOLVES_TO",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "Callable",
-        "External",
-        "AnonymousCallable"
+        "TSCallable",
+        "TSExternal",
+        "TSAnonymousCallable"
       ],
       "properties": {}
     },
     {
-      "type": "CALLS",
+      "type": "TS_CALLS",
       "from": [
-        "Callable",
-        "AnonymousCallable"
+        "TSCallable",
+        "TSAnonymousCallable"
       ],
       "to": [
-        "Callable",
-        "External",
-        "AnonymousCallable"
+        "TSCallable",
+        "TSExternal",
+        "TSAnonymousCallable"
       ],
       "properties": {
         "weight": "integer",
@@ -293,12 +293,12 @@
       }
     },
     {
-      "type": "CFG_NEXT",
+      "type": "TS_CFG_NEXT",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {
         "kind": "string",
@@ -306,22 +306,22 @@
       }
     },
     {
-      "type": "CDG",
+      "type": "TS_CDG",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {}
     },
     {
-      "type": "DDG",
+      "type": "TS_DDG",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {
         "var": "string",
@@ -330,61 +330,61 @@
       }
     },
     {
-      "type": "SUMMARY",
+      "type": "TS_SUMMARY",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {
         "var": "string"
       }
     },
     {
-      "type": "PARAM_IN",
+      "type": "TS_PARAM_IN",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {
         "var": "string"
       }
     },
     {
-      "type": "PARAM_OUT",
+      "type": "TS_PARAM_OUT",
       "from": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "to": [
-        "BodyNode"
+        "TSBodyNode"
       ],
       "properties": {
         "var": "string"
       }
     },
     {
-      "type": "EXTENDS",
+      "type": "TS_EXTENDS",
       "from": [
-        "Class",
-        "Interface"
+        "TSClass",
+        "TSInterface"
       ],
       "to": [
-        "Class",
-        "Interface"
+        "TSClass",
+        "TSInterface"
       ],
       "properties": {}
     },
     {
-      "type": "IMPLEMENTS",
+      "type": "TS_IMPLEMENTS",
       "from": [
-        "Class"
+        "TSClass"
       ],
       "to": [
-        "Interface",
-        "Class"
+        "TSInterface",
+        "TSClass"
       ],
       "properties": {}
     }
@@ -394,21 +394,7 @@
     "CREATE CONSTRAINT cannode_id IF NOT EXISTS FOR (x:CanNode) REQUIRE x.id IS UNIQUE"
   ],
   "indexes": [
-    "CREATE INDEX callable_name IF NOT EXISTS FOR (c:Callable) ON (c.name)",
+    "CREATE INDEX callable_name IF NOT EXISTS FOR (c:TSCallable) ON (c.name)",
     "CREATE INDEX cannode_kind IF NOT EXISTS FOR (n:CanNode) ON (n.kind)"
-  ],
-  "label_twins": {
-    "Application": "TSApplication",
-    "Module": "TSModule",
-    "Class": "TSClass",
-    "Interface": "TSInterface",
-    "Enum": "TSEnum",
-    "TypeAlias": "TSTypeAlias",
-    "Namespace": "TSNamespace",
-    "Callable": "TSCallable",
-    "Field": "TSField",
-    "BodyNode": "TSBodyNode",
-    "External": "TSExternal",
-    "AnonymousCallable": "TSAnonymousCallable"
-  }
+  ]
 }

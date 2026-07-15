@@ -16,7 +16,7 @@ const CAN_NODE = "CanNode";
 
 /** How an edge addresses one of its endpoints: the label + key property to MATCH on, and value. */
 export interface NodeRef {
-  label: string; // the label carrying the uniqueness constraint (e.g. "Symbol", "Module")
+  label: string; // the label carrying the uniqueness constraint ("Application" | "CanNode")
   keyProp: string; // "signature" | "file_key" | "name" | "qualified_name" | "id"
   value: string;
 }
@@ -69,18 +69,11 @@ export class RowBuilder {
   private readonly keys = new Set<string>(); // every node value seen, for resolved-gating
 
   /**
-   * @param expand optional label-set expander applied to every node's labels (the schema layer
-   * injects its twin-label policy here; rows.ts itself stays schema-agnostic). Must keep the
-   * merge label at index 0.
-   */
-  constructor(private readonly expand: (labels: string[]) => string[] = (l) => l) {}
-
-  /**
    * Upsert a node. Re-seeing the same (mergeLabel, value) merges props (last write wins) and
-   * unions labels — the in-memory analog of `MERGE (n:Label {key}) SET n += props`.
+   * unions labels — the in-memory analog of `MERGE (n:Label {key}) SET n += props`. `labels[0]`
+   * must be the merge label ("Application" | "CanNode").
    */
   node(labels: string[], keyProp: string, value: string, props: Props): NodeRef {
-    labels = this.expand(labels);
     const id = `${labels[0]}\0${value}`;
     const existing = this.nodes.get(id);
     if (existing) {

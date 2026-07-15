@@ -1,7 +1,7 @@
 /**
  * Issue #13 (schema v2): Jelly's synthesized anonymous-callback signatures must materialize as
  * graph nodes so their CALLS edges resolve instead of being silently dropped by the MATCH-based
- * Cypher writer. Under v2 they are homed as `:CanNode:AnonymousCallable` nodes with an ordinal
+ * Cypher writer. Under v2 they are homed as `:CanNode:TSAnonymousCallable` nodes with an ordinal
  * `<enclosing-callable-id>@<line>:<col>` id, and the call graph references that id.
  */
 import { describe, expect, test } from "bun:test";
@@ -41,15 +41,15 @@ describe("synthesized anonymous-callable nodes (schema v2)", () => {
     expect(anonId).toBe(`${fooId}@3:10`);
   });
 
-  test("emits a :CanNode:AnonymousCallable node for it", () => {
+  test("emits a :CanNode:TSAnonymousCallable node for it", () => {
     const n = rows.nodes.find((n) => n.value === anonId);
     expect(n?.labels[0]).toBe("CanNode");
-    expect(n?.labels).toContain("AnonymousCallable");
+    expect(n?.labels).toContain("TSAnonymousCallable");
     expect(n?.props.start_line).toBe(3);
   });
 
   test("the CALLS edge to the anonymous callable resolves (was silently dropped before)", () => {
-    const e = rows.edges.find((e) => e.type === "CALLS" && e.to.value === anonId);
+    const e = rows.edges.find((e) => e.type === "TS_CALLS" && e.to.value === anonId);
     expect(e?.from.value).toBe(fooId);
   });
 });
