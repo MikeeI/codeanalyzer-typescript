@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "generator": "codeanalyzer-typescript",
   "marker_labels": [
     "Entrypoint"
@@ -456,5 +456,23 @@
     "CREATE INDEX callable_name IF NOT EXISTS FOR (c:Callable) ON (c.name)",
     "CREATE INDEX decorator_name IF NOT EXISTS FOR (d:Decorator) ON (d.name)",
     "CREATE FULLTEXT INDEX code_fts IF NOT EXISTS FOR (c:Callable) ON EACH [c.code, c.docstring]"
-  ]
+  ],
+  "label_twins": {
+    "Application": "TSApplication",
+    "Module": "TSModule",
+    "Class": "TSClass",
+    "Interface": "TSInterface",
+    "Enum": "TSEnum",
+    "TypeAlias": "TSTypeAlias",
+    "Namespace": "TSNamespace",
+    "Callable": "TSCallable",
+    "External": "TSExternal",
+    "AnonymousCallable": "TSAnonymousCallable",
+    "Package": "TSPackage",
+    "Decorator": "TSDecorator",
+    "CallSite": "TSCallSite",
+    "Attribute": "TSAttribute",
+    "Variable": "TSVariable",
+    "Entrypoint": "TSEntrypoint"
+  }
 }
