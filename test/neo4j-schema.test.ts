@@ -16,6 +16,8 @@ import {
   REL_TYPES,
   buildSchemaDocument,
   project,
+  twinOf,
+  withTwins,
 } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
@@ -44,13 +46,17 @@ const byLabel = new Map(NODE_LABELS.map((n) => [n.label, n]));
 const mergeOf = new Map(NODE_LABELS.map((n) => [n.label, n.mergeLabel]));
 const relByType = new Map(REL_TYPES.map((r) => [r.type, r]));
 const markers = new Set<string>(MARKER_LABELS);
+const twins = new Set<string>([
+  ...NODE_LABELS.map((n) => twinOf(n.label)),
+  ...MARKER_LABELS.map((m) => twinOf(m)),
+]);
 const mergeLabelsFor = (specifics: string[]) => new Set(specifics.map((s) => mergeOf.get(s)));
 
-/** The specific (schema) label for a node row: the non-merge, non-marker label (`Application`
- * has only its own label; every `CanNode` carries exactly one specific kind label). */
+/** The specific (schema) label for a node row: the non-merge, non-marker, non-twin label
+ * (`Application` has only its own label; every `CanNode` carries exactly one specific kind label). */
 function specificLabel(labels: string[]): string {
   const merge = labels[0];
-  return labels.find((l) => l !== merge && !markers.has(l)) ?? merge;
+  return labels.find((l) => l !== merge && !markers.has(l) && !twins.has(l)) ?? merge;
 }
 
 const rows = await fixtureRows();
@@ -65,7 +71,7 @@ describe("neo4j schema conformance", () => {
       expect(node.labels[0]).toBe(decl!.mergeLabel);
 
       for (const label of node.labels) {
-        const ok = label === decl!.mergeLabel || label === specific || markers.has(label);
+        const ok = label === decl!.mergeLabel || label === specific || markers.has(label) || twins.has(label);
         expect(ok, `unexpected label '${label}' on ${specific}`).toBe(true);
       }
       for (const key of Object.keys(node.props)) {
@@ -90,6 +96,17 @@ describe("neo4j schema conformance", () => {
     const onDisk = fs.readFileSync(path.resolve(import.meta.dir, "..", "schema.neo4j.json"), "utf8").trim();
     const fresh = JSON.stringify(buildSchemaDocument(), null, 2).trim();
     expect(onDisk).toBe(fresh);
+  });
+
+  test("every node carries exactly the TS twins of its base labels (transient dual-labeling)", () => {
+    for (const node of rows.nodes) {
+      const base = node.labels.filter((l) => !twins.has(l));
+      expect(new Set(node.labels), `bad twin set on ${node.labels.join(":")} ${node.value}`).toEqual(
+        new Set(withTwins(base)),
+      );
+      // the shared merge label (`CanNode` / `Application`) stays bare at index 0.
+      expect(twins.has(node.labels[0]), `merge label must stay bare: ${node.labels[0]}`).toBe(false);
+    }
   });
 });
 

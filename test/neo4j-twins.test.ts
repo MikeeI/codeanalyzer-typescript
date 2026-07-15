@@ -1,6 +1,8 @@
 /**
- * Twin-label vocabulary (graph schema 1.1.0, issue #65): every specific and marker label has a
- * TS-prefixed twin; the shared merge label `Symbol` deliberately has none (epic #64).
+ * Twin-label vocabulary (transient dual-labeling on graph schema 2.0.0, issue #65): every specific
+ * and marker label has a TS-prefixed twin; the shared merge labels (`Symbol`, `CanNode`)
+ * deliberately have none (epic #64). The v2 catalog merges on `CanNode`, so it is the merge label
+ * that must stay bare here.
  */
 import { describe, expect, test } from "bun:test";
 import {
@@ -20,25 +22,31 @@ describe("TS twin-label vocabulary", () => {
     expect(twinOf("Entrypoint")).toBe("TSEntrypoint");
   });
 
-  test("withTwins appends a twin per label, keeps order, and skips Symbol", () => {
+  test("withTwins appends a twin per label, keeps order, and skips shared merge labels", () => {
     expect(withTwins(["Module"])).toEqual(["Module", "TSModule"]);
+    // both shared merge labels are skipped (v2 merges on CanNode)
+    expect(withTwins(["CanNode", "Callable"])).toEqual(["CanNode", "Callable", "TSCallable"]);
     expect(withTwins(["Symbol", "Class"])).toEqual(["Symbol", "Class", "TSClass"]);
-    expect(withTwins(["Symbol", "Callable", "Entrypoint"])).toEqual([
-      "Symbol", "Callable", "Entrypoint", "TSCallable", "TSEntrypoint",
+    expect(withTwins(["CanNode", "Callable", "Entrypoint"])).toEqual([
+      "CanNode", "Callable", "Entrypoint", "TSCallable", "TSEntrypoint",
     ]);
     // idempotent: an already-expanded set gains nothing
     expect(withTwins(["Module", "TSModule"])).toEqual(["Module", "TSModule"]);
   });
 
-  test("schema version is 1.1.0 (additive MINOR)", () => {
-    expect(SCHEMA_VERSION).toBe("1.1.0");
+  test("schema version is 2.0.0 (v2 catalog)", () => {
+    expect(SCHEMA_VERSION).toBe("2.0.0");
   });
 
   test("schema document maps every specific + marker label to its twin", () => {
     const doc = buildSchemaDocument();
     for (const n of NODE_LABELS) expect(doc.label_twins[n.label]).toBe(twinOf(n.label));
     for (const m of MARKER_LABELS) expect(doc.label_twins[m]).toBe(twinOf(m));
+    // shared merge labels are never specific/marker labels, so they map to nothing
+    expect(doc.label_twins["CanNode"]).toBeUndefined();
     expect(doc.label_twins["Symbol"]).toBeUndefined();
+    // 12 node labels + 1 marker (Entrypoint) = 13 twins
+    expect(Object.keys(doc.label_twins).length).toBe(13);
     expect(Object.keys(doc.label_twins).length).toBe(NODE_LABELS.length + MARKER_LABELS.length);
   });
 });

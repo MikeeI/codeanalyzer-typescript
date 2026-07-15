@@ -406,5 +406,20 @@
   "indexes": [
     "CREATE INDEX callable_name IF NOT EXISTS FOR (c:Callable) ON (c.name)",
     "CREATE INDEX cannode_kind IF NOT EXISTS FOR (n:CanNode) ON (n.kind)"
-  ]
+  ],
+  "label_twins": {
+    "Application": "TSApplication",
+    "Module": "TSModule",
+    "Class": "TSClass",
+    "Interface": "TSInterface",
+    "Enum": "TSEnum",
+    "TypeAlias": "TSTypeAlias",
+    "Namespace": "TSNamespace",
+    "Callable": "TSCallable",
+    "Field": "TSField",
+    "BodyNode": "TSBodyNode",
+    "External": "TSExternal",
+    "AnonymousCallable": "TSAnonymousCallable",
+    "Entrypoint": "TSEntrypoint"
+  }
 }

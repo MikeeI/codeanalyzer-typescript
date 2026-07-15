@@ -11,7 +11,7 @@
  */
 
 import type { V2Application, V2BodyNode, V2Callable, V2External, V2Field, V2Module, V2Node, V2Root, V2Type } from "../../schema/v2";
-import { SCHEMA_VERSION } from "./schema";
+import { SCHEMA_VERSION, withTwins } from "./schema";
 import { type GraphRows, type NodeRef, type Prop, type Props, RowBuilder, prune } from "./rows";
 
 /** The shared MERGE label + key every can://-id-keyed node is addressed by. */
@@ -42,7 +42,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export function project(app: V2Application, _appName?: string): GraphRows {
-  const b = new RowBuilder();
+  const b = new RowBuilder(withTwins);
   const root: V2Root = app.application;
 
   const appRef = b.node(["Application"], "id", root.id, prune({

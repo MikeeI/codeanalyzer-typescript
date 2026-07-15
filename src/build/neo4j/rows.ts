@@ -62,10 +62,18 @@ export class RowBuilder {
   private readonly keys = new Set<string>(); // every node value seen, for resolved-gating
 
   /**
+   * @param expand optional label-set expander applied to every node's labels (the schema layer
+   * injects its twin-label policy here; rows.ts itself stays schema-agnostic). Must keep the
+   * merge label at index 0.
+   */
+  constructor(private readonly expand: (labels: string[]) => string[] = (l) => l) {}
+
+  /**
    * Upsert a node. Re-seeing the same (mergeLabel, value) merges props (last write wins) and
    * unions labels — the in-memory analog of `MERGE (n:Label {key}) SET n += props`.
    */
   node(labels: string[], keyProp: string, value: string, props: Props): NodeRef {
+    labels = this.expand(labels);
     const id = `${labels[0]}\0${value}`;
     const existing = this.nodes.get(id);
     if (existing) {

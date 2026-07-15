@@ -38,6 +38,35 @@ export interface RelType {
 /** Labels layered onto a node in addition to its primary/specific label. */
 export const MARKER_LABELS = ["Entrypoint"] as const;
 
+/**
+ * Language-namespace twins (transient dual-labeling, issue #65): every specific and marker label is
+ * also stamped as `TS<Label>` so a shared multi-language database can attribute TS nodes (epic #64).
+ * The shared MERGE labels (`Symbol`, `CanNode`) deliberately have NO twin — MERGE targets, keys and
+ * constraints are unchanged. This dual-label state is transient; the vocabulary is finalized later.
+ */
+export const TS_PREFIX = "TS";
+
+/** The TS-prefixed twin of a specific or marker label. */
+export const twinOf = (label: string): string => `${TS_PREFIX}${label}`;
+
+/** Shared merge labels never get a twin — they carry the constraint; node identity is unchanged. */
+const UNTWINNED = new Set(["Symbol", "CanNode"]);
+
+/**
+ * Expand a projection label set with its twins: order preserved, shared merge labels skipped,
+ * idempotent. Any label already starting with `TS` is treated as a twin and never re-prefixed — so
+ * no bare label may legitimately begin with `TS`.
+ */
+export function withTwins(labels: string[]): string[] {
+  const out = [...labels];
+  for (const l of labels) {
+    if (UNTWINNED.has(l) || l.startsWith(TS_PREFIX)) continue;
+    const t = twinOf(l);
+    if (!out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
 /** The shared MERGE label for every can://-id-keyed node (one constraint; uniform edge endpoints). */
 const CAN = "CanNode";
 const SPAN = { start_line: "integer", end_line: "integer" } as const;
@@ -200,6 +229,16 @@ export interface SchemaDocument {
   relationship_types: RelType[];
   constraints: readonly string[];
   indexes: readonly string[];
+  /** Specific/marker label → its TS-prefixed twin (both are present on every emitted node). */
+  label_twins: Record<string, string>;
+}
+
+/** One twin per specific label + per marker label — derived from the catalogs, never drifts. */
+function labelTwins(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const n of NODE_LABELS) out[n.label] = twinOf(n.label);
+  for (const m of MARKER_LABELS) out[m] = twinOf(m);
+  return out;
 }
 
 /** Build the full machine-readable schema document emitted by `--emit schema`. */
@@ -212,5 +251,6 @@ export function buildSchemaDocument(): SchemaDocument {
     relationship_types: REL_TYPES,
     constraints: CONSTRAINTS,
     indexes: INDEXES,
+    label_twins: labelTwins(),
   };
 }
