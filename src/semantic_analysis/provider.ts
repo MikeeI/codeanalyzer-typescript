@@ -21,6 +21,10 @@ export interface CallGraphContext {
   root: string;
   log: Logger;
   phantoms: boolean;
+  // Multi-program scoping: when set, iterate only callables whose module fileKey is in this set
+  // (the current program's files). Signature GATING still uses the full merged symbol_table, so a
+  // cross-program in-project call resolves rather than becoming a phantom. Undefined = all files.
+  only?: Set<string>;
 }
 
 export interface CallGraphProvider {
@@ -31,7 +35,7 @@ export interface CallGraphProvider {
 /** The always-available backend — wraps the existing tsc resolver with zero behavior change. */
 export const tscProvider: CallGraphProvider = {
   name: "tsc",
-  build: (ctx) => buildCallGraph(ctx.project, ctx.symbol_table, ctx.root, ctx.log, ctx.phantoms),
+  build: (ctx) => buildCallGraph(ctx.project, ctx.symbol_table, ctx.root, ctx.log, ctx.phantoms, ctx.only),
 };
 
 /**

@@ -4,7 +4,7 @@ import { relPosix } from "../utils";
 
 const SOURCE_EXTS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
   ".codeanalyzer",

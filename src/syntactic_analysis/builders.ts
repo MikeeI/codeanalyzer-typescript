@@ -20,6 +20,7 @@ import {
   type TSModule,
   type TSNamespace,
   type TSOverloadSignature,
+  type TSSpan,
   type TSTypeAlias,
   type TSTypeParameter,
   type TSVariableDeclaration,
@@ -84,6 +85,20 @@ function span(node: Node): { start_line: number; end_line: number; start_column:
   const s = sf.getLineAndColumnAtPos(node.getStart());
   const e = sf.getLineAndColumnAtPos(node.getEnd());
   return { start_line: s.line, end_line: e.line, start_column: s.column, end_column: e.column };
+}
+
+/**
+ * schema-v2 precise span: [line, column] endpoints + char offsets into the module source.
+ * `bytes = [getStart(), getEnd()]` are exactly the offsets `Node.getText()` slices, so
+ * `module.source.slice(bytes[0], bytes[1])` reproduces the node's text (the old `code` field).
+ */
+function richSpan(node: Node): TSSpan {
+  const sf = node.getSourceFile();
+  const s = node.getStart();
+  const e = node.getEnd();
+  const sl = sf.getLineAndColumnAtPos(s);
+  const el = sf.getLineAndColumnAtPos(e);
+  return { start: [sl.line, sl.column], end: [el.line, el.column], bytes: [s, e] };
 }
 
 function declLines(node: Node): { start_line: number; end_line: number; code_start_line: number } {
@@ -243,6 +258,7 @@ function buildVariable(vd: Node, scope: TSVariableDeclaration["scope"]): TSVaria
     is_readonly: declaration_kind === "const",
     is_exported: vs?.isExported?.() ?? false,
     ...span(vd),
+    span: richSpan(vd),
   };
 }
 
@@ -253,6 +269,7 @@ function buildAttribute(prop: Node): TSClassAttribute {
     getInitializer?: () => { getText: () => string } | undefined;
   };
   return {
+    span: richSpan(prop),
     name: p.getName(),
     type: p.getTypeNode?.()?.getText() ?? inferredType(prop),
     comments: jsDocsOf(prop),
@@ -296,6 +313,7 @@ function buildCallsite(call: Node): TSCallsite {
     is_constructor_call: isNew,
     is_optional_chain,
     ...span(call),
+    bytes: [call.getStart(), call.getEnd()],
   };
 }
 
@@ -434,6 +452,7 @@ export function buildCallable(
     Node.isConstructorDeclaration(fnNode) ? "constructor" : (nameNode.getName?.() ?? "(anonymous)");
 
   const callable: TSCallable = {
+    span: richSpan(sigNode),
     name,
     path: sigNode.getSourceFile().getFilePath(),
     signature: sig,
@@ -444,13 +463,11 @@ export function buildCallable(
     return_type: kind === "constructor" || kind === "setter" ? null : returnTypeText(fnNode),
     code: clamp(sigNode.getText(), 20000),
     ...declLines(sigNode),
-    accessed_symbols: [],
     call_sites,
     inner_callables,
     inner_classes,
     local_variables,
     cyclomatic_complexity: body ? computeCC(body) : 0,
-    entrypoints: [],
     kind,
     accessibility: accessibilityOf(fnNode),
     is_static: boolOf(fnNode, "isStatic"),
@@ -473,6 +490,7 @@ function implicitConstructor(classSig: string, filePath: string): { sig: string;
   return {
     sig,
     callable: {
+      span: { start: [0, 0], end: [0, 0], bytes: [0, 0] }, // synthetic: no source
       name: "constructor",
       path: filePath,
       signature: sig,
@@ -485,13 +503,11 @@ function implicitConstructor(classSig: string, filePath: string): { sig: string;
       start_line: -1,
       end_line: -1,
       code_start_line: -1,
-      accessed_symbols: [],
       call_sites: [],
       inner_callables: {},
       inner_classes: {},
       local_variables: [],
       cyclomatic_complexity: 0,
-      entrypoints: [],
       kind: "constructor",
       accessibility: null,
       is_static: false,
@@ -623,6 +639,7 @@ export function buildClass(cls: Node, root: string): { sig: string; cls: TSClass
   return {
     sig,
     cls: {
+      span: richSpan(cls),
       name: c.getName?.() ?? "(anonymous)",
       signature: sig,
       comments: jsDocsOf(cls),
@@ -634,7 +651,6 @@ export function buildClass(cls: Node, root: string): { sig: string; cls: TSClass
       methods,
       attributes,
       inner_classes: {},
-      entrypoints: [],
       is_abstract: boolOf(cls, "isAbstract"),
       is_exported: isExportedDecl(cls),
       is_ambient: isAmbientDecl(cls),
@@ -673,6 +689,7 @@ export function buildInterface(intf: Node, root: string): { sig: string; intf: T
   return {
     sig,
     intf: {
+      span: richSpan(intf),
       name: i.getName(),
       signature: sig,
       comments: jsDocsOf(intf),
@@ -702,6 +719,7 @@ export function buildEnum(en: Node, root: string): { sig: string; en: TSEnum } {
     };
     const v = mm.getValue?.();
     return {
+      span: richSpan(m),
       name: mm.getName(),
       value: v !== undefined && v !== null ? String(v) : (mm.getInitializer?.()?.getText() ?? null),
       start_line: m.getStartLineNumber(true),
@@ -711,6 +729,7 @@ export function buildEnum(en: Node, root: string): { sig: string; en: TSEnum } {
   return {
     sig,
     en: {
+      span: richSpan(en),
       name: e.getName(),
       signature: sig,
       comments: jsDocsOf(en),
@@ -731,6 +750,7 @@ export function buildTypeAlias(ta: Node, root: string): { sig: string; ta: TSTyp
   return {
     sig,
     ta: {
+      span: richSpan(ta),
       name: t.getName(),
       signature: sig,
       comments: jsDocsOf(ta),
@@ -822,6 +842,7 @@ export function buildNamespace(ns: Node, root: string): { sig: string; ns: TSNam
   return {
     sig,
     ns: {
+      span: richSpan(ns),
       name: (ns as unknown as { getName: () => string }).getName(),
       signature: sig,
       comments: jsDocsOf(ns),
@@ -945,7 +966,12 @@ export function buildModule(sf: Node, root: string): TSModule {
   const filePath = sf.getSourceFile().getFilePath();
   const { fileKey, modulePrefix } = fileKeyOf(filePath, root);
   const buckets = buildStatemented(sf, root, "module");
+  // schema-v2: retain the whole file text once on the module; every node's text slices off it.
+  const source = (sf as unknown as { getFullText: () => string }).getFullText();
+  const endLc = sf.getSourceFile().getLineAndColumnAtPos(source.length);
   return {
+    span: { start: [1, 1], end: [endLc.line, endLc.column], bytes: [0, source.length] },
+    source,
     file_path: fileKey,
     module_name: modulePrefix,
     imports: buildImports(sf),

@@ -12,9 +12,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Neo4jContainer, type StartedNeo4jContainer } from "@testcontainers/neo4j";
 import neo4j, { type Driver } from "neo4j-driver";
-import { type BoltConfig, boltWriter, project } from "../src/build/neo4j";
+import { type BoltConfig, boltWriter, CONSTRAINTS, INDEXES, project } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
+import { toV2 } from "../src/schema/v2";
 import { Logger } from "../src/utils";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
@@ -36,7 +37,12 @@ function optsFor(overrides: Partial<AnalysisOptions> = {}): AnalysisOptions {
     neo4jUser: "neo4j",
     neo4jPassword: "",
     neo4jDatabase: null,
-    analysisLevel: 1,
+    // >= 2: the call graph (incl. jelly) solve is skipped below that level since the v2 emitter
+    // discards it at -a 1 (#46 sibling fix, 6078c7e) — this suite asserts on TS_CALLS edges.
+    analysisLevel: 2,
+    graphs: ["cfg", "dfg", "pdg", "sdg"],
+    graphFieldDepth: 3,
+    jobs: 1,
     targetFiles: null,
     skipTests: true,
     eager: true,
@@ -86,29 +92,36 @@ containerSuite("neo4j bolt writer", () => {
   test(
     "full push materializes the whole graph + schema",
     async () => {
-      const rows = project(analyze(optsFor()), "sample-app");
+      const opts = optsFor();
+      const rows = project(toV2(await analyze(opts), opts));
       await boltWriter(rows, cfg, log, true);
 
       // Every projected node/edge lands (the fixture has no library deps, so endpoints all resolve).
       expect(await num("MATCH (n) RETURN count(n)")).toBe(rows.nodes.length);
       expect(await num("MATCH ()-[r]->() RETURN count(r)")).toBe(rows.edges.length);
 
-      // Shared :Symbol label spans the signature-keyed declaration kinds.
-      const symbol = await num("MATCH (s:Symbol) RETURN count(s)");
+      // Shared :CanNode label spans every project-owned node kind (schema v2's universal
+      // merge label — Application is the only node kind that sits outside it).
+      const canNode = await num("MATCH (s:CanNode) RETURN count(s)");
       const kinds = await num(
-        "MATCH (s:Symbol) WHERE s:Callable OR s:Class OR s:Interface OR s:Enum OR s:TypeAlias OR s:Namespace OR s:External RETURN count(s)",
+        "MATCH (s:CanNode) WHERE s:TSModule OR s:TSClass OR s:TSInterface OR s:TSEnum OR s:TSTypeAlias OR s:TSNamespace OR s:TSCallable OR s:TSField OR s:TSBodyNode OR s:TSExternal OR s:TSAnonymousCallable RETURN count(s)",
       );
-      expect(symbol).toBeGreaterThan(0);
-      expect(kinds).toBe(symbol);
+      expect(canNode).toBeGreaterThan(0);
+      expect(kinds).toBe(canNode);
 
-      // Constraints + indexes were created up front.
-      expect(await num("SHOW CONSTRAINTS YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(8);
-      expect(await num("SHOW INDEXES YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(11);
+      // Constraints + indexes were created up front. Expectations derive from the catalog (a
+      // uniqueness constraint also spawns a backing index, so SHOW INDEXES only grows from here).
+      expect(await num("SHOW CONSTRAINTS YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(
+        CONSTRAINTS.length,
+      );
+      expect(await num("SHOW INDEXES YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(
+        INDEXES.length,
+      );
 
       // A known resolved call edge from the fixture (index.ts calls services.announce).
       expect(
         await num(
-          "MATCH (:Callable)-[:CALLS]->(t:Callable {name:$n}) RETURN count(*)",
+          "MATCH (:TSCallable)-[:TS_CALLS]->(t:TSCallable {name:$n}) RETURN count(*)",
           { n: "announce" },
         ),
       ).toBeGreaterThan(0);
@@ -119,7 +132,8 @@ containerSuite("neo4j bolt writer", () => {
   test(
     "re-pushing identical analysis is idempotent",
     async () => {
-      const rows = project(analyze(optsFor()), "sample-app");
+      const opts = optsFor();
+      const rows = project(toV2(await analyze(opts), opts));
       await boltWriter(rows, cfg, log, true);
       expect(await num("MATCH (n) RETURN count(n)")).toBe(rows.nodes.length);
       expect(await num("MATCH ()-[r]->() RETURN count(r)")).toBe(rows.edges.length);
@@ -130,20 +144,64 @@ containerSuite("neo4j bolt writer", () => {
   test(
     "a full run prunes a module whose source vanished",
     async () => {
-      const app = analyze(optsFor());
+      const opts = optsFor();
+      const app = await analyze(opts);
       const victim = Object.keys(app.symbol_table).sort()[0];
       delete app.symbol_table[victim];
 
-      const rows = project(app, "sample-app");
+      const rows = project(toV2(app, opts));
       await boltWriter(rows, cfg, log, true);
 
       // The victim's nodes are gone.
       expect(await num("MATCH (n {_module:$m}) RETURN count(n)", { m: victim })).toBe(0);
 
-      // The surviving module-scoped graph matches the reduced projection. (Shared :External/:Package
+      // The surviving module-scoped graph matches the reduced projection. (Shared :TSExternal
       // nodes are MERGE-only and intentionally never pruned, so we compare only _module-tagged nodes.)
       const moduleScoped = rows.nodes.filter((n) => "_module" in n.props).length;
       expect(await num("MATCH (n) WHERE n._module IS NOT NULL RETURN count(n)")).toBe(moduleScoped);
+    },
+    120_000,
+  );
+
+  test(
+    "migrates a 1.1.0-shaped graph to 2.0.0, wiping legacy residue (#46)",
+    async () => {
+      // Seed a minimal schema-1.1.0 graph on a clean store: twin labels, the old
+      // name/file_key/signature keys, and an :Application keyed on `name` (no `id`).
+      const seed = driver.session();
+      try {
+        await seed.run("MATCH (n) DETACH DELETE n");
+        await seed.run(
+          "CREATE (:Application {name:'sample-app', schema_version:'1.1.0'}) " +
+            "CREATE (:Module:TSModule {file_key:'x.ts', _module:'x.ts', content_hash:'stale'}) " +
+            "CREATE (:Symbol:TSCallable {signature:'x', _module:'x.ts'})",
+        );
+      } finally {
+        await seed.close();
+      }
+
+      // A full 2.0.0 push against the same DB must detect the version mismatch and wipe the residue.
+      const opts = optsFor();
+      const rows = project(toV2(await analyze(opts), opts));
+      await boltWriter(rows, cfg, log, true);
+
+      // Exactly one :Application survives — the fresh v2 one (id set, version bumped). The 1.x app,
+      // keyed on name with no id, was wiped, so the version read is no longer nondeterministic.
+      expect(await num("MATCH (a:Application) RETURN count(a)")).toBe(1);
+      expect(
+        await num(
+          "MATCH (a:Application) WHERE a.id IS NOT NULL AND a.schema_version = '2.0.0' RETURN count(a)",
+        ),
+      ).toBe(1);
+
+      // No legacy twin-label residue remains (would-be poison for v2 label queries).
+      expect(
+        await num("MATCH (n) WHERE n._module IS NOT NULL AND NOT n:CanNode RETURN count(n)"),
+      ).toBe(0);
+
+      // The stale 'x.ts' :TSModule seed did not survive as a duplicate — exactly the fixture's modules.
+      const fixtureModules = rows.nodes.filter((n) => n.labels.includes("TSModule")).length;
+      expect(await num("MATCH (m:TSModule) RETURN count(m)")).toBe(fixtureModules);
     },
     120_000,
   );

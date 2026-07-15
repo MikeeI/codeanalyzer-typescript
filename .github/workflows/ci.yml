@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit + conformance tests
+        run: bun test
+
+      # Container suite is opt-in; ubuntu-latest ships Docker, so testcontainers works out of the box.
+      - name: Neo4j bolt container tests
+        run: RUN_CONTAINER_TESTS=1 bun test test/neo4j-bolt.test.ts

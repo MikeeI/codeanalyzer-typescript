@@ -9,30 +9,32 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import pkg from "../package.json";
 import {
   MARKER_LABELS,
   NODE_LABELS,
   REL_TYPES,
   buildSchemaDocument,
   project,
-  twinOf,
-  withTwins,
 } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
+import { toV2Detailed } from "../src/schema/v2";
 
-const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
+const FIXTURE = path.resolve(import.meta.dir, "fixtures/dataflow-app");
 
-function fixtureRows() {
+async function fixtureRows() {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-schema-test-"));
+  // --emit neo4j is always full-depth, so exercise every node/edge kind at L4.
   const opts: AnalysisOptions = {
-    input: FIXTURE, output: null, emit: "json", appName: "sample-app",
+    input: FIXTURE, output: null, emit: "neo4j", appName: "dataflow-app",
     neo4jUri: null, neo4jUser: "neo4j", neo4jPassword: "", neo4jDatabase: null,
-    analysisLevel: 1, targetFiles: null, skipTests: true, eager: true,
-    noBuild: true, phantoms: true, callGraphProvider: "tsc", cacheDir, verbosity: 0,
+    analysisLevel: 4, graphs: ["cfg", "dfg", "pdg", "sdg"], graphFieldDepth: 3, jobs: 1,
+    targetFiles: null, skipTests: true, eager: true,
+    noBuild: true, phantoms: true, callGraphProvider: "union", cacheDir, verbosity: 0,
   };
   try {
-    return project(analyze(opts), "sample-app");
+    return project(toV2Detailed(await analyze(opts), opts).application);
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -42,21 +44,18 @@ const byLabel = new Map(NODE_LABELS.map((n) => [n.label, n]));
 const mergeOf = new Map(NODE_LABELS.map((n) => [n.label, n.mergeLabel]));
 const relByType = new Map(REL_TYPES.map((r) => [r.type, r]));
 const markers = new Set<string>(MARKER_LABELS);
-const twins = new Set<string>([
-  ...NODE_LABELS.map((n) => twinOf(n.label)),
-  ...MARKER_LABELS.map((m) => twinOf(m)),
-]);
 const mergeLabelsFor = (specifics: string[]) => new Set(specifics.map((s) => mergeOf.get(s)));
 
-/** The specific (schema) label for a node row: the non-merge, non-marker, non-twin label. */
+/** The specific (schema) label for a node row: the non-merge, non-marker label (`TSApplication`
+ * carries `Application` as its merge label; every `CanNode` carries exactly one specific kind label). */
 function specificLabel(labels: string[]): string {
   const merge = labels[0];
-  if (merge !== "Symbol") return merge;
-  return labels.find((l) => l !== "Symbol" && !markers.has(l) && !twins.has(l)) ?? "Symbol";
+  return labels.find((l) => l !== merge && !markers.has(l)) ?? merge;
 }
 
+const rows = await fixtureRows();
+
 describe("neo4j schema conformance", () => {
-  const rows = fixtureRows();
 
   test("every emitted node label + property is declared in the schema", () => {
     for (const node of rows.nodes) {
@@ -66,7 +65,7 @@ describe("neo4j schema conformance", () => {
       expect(node.labels[0]).toBe(decl!.mergeLabel);
 
       for (const label of node.labels) {
-        const ok = label === decl!.mergeLabel || label === specific || markers.has(label) || twins.has(label);
+        const ok = label === decl!.mergeLabel || label === specific || markers.has(label);
         expect(ok, `unexpected label '${label}' on ${specific}`).toBe(true);
       }
       for (const key of Object.keys(node.props)) {
@@ -93,19 +92,93 @@ describe("neo4j schema conformance", () => {
     expect(onDisk).toBe(fresh);
   });
 
-  test("every node carries exactly the TS twins of its base labels (1.1.0 dual-labeling)", () => {
-    for (const node of rows.nodes) {
-      const base = node.labels.filter((l) => !twins.has(l));
-      expect(new Set(node.labels), `bad twin set on ${node.labels.join(":")} ${node.value}`).toEqual(
-        new Set(withTwins(base)),
-      );
-      expect(twins.has(node.labels[0]), `merge label must stay bare: ${node.labels[0]}`).toBe(false);
+  test("2.0.0 does not advertise never-populated surfaces (issues #55/#60)", () => {
+    const doc = buildSchemaDocument();
+    expect(doc.marker_labels.length).toBe(0);
+    const allProps = doc.node_labels.flatMap((n) => Object.keys(n.properties));
+    for (const dead of ["framework", "detection_source", "route_path", "http_methods", "entrypoint_count", "accessed_symbols_json"]) {
+      expect(allProps, `dead property still advertised: ${dead}`).not.toContain(dead);
     }
   });
 
-  test(":Application is stamped with the 1.1.0 contract version", () => {
-    const app = rows.nodes.find((n) => n.labels[0] === "Application");
-    expect(app).toBeDefined();
-    expect(app!.props.schema_version).toBe("1.1.0");
+  test("2.0.0 emits only TS-prefixed specific labels and TS_ rel types (#66)", () => {
+    for (const node of rows.nodes) {
+      for (const l of node.labels) {
+        const ok = l === "CanNode" || l === "Application" || l.startsWith("TS");
+        expect(ok, `bare label leaked: ${l}`).toBe(true);
+      }
+    }
+    for (const edge of rows.edges) expect(edge.type.startsWith("TS_"), `bare rel leaked: ${edge.type}`).toBe(true);
+  });
+});
+
+// ---- :Application analyzer identity (issue #43) ------------------------------------------------
+// The JSON envelope advertises `analyzer{name,version}` (#29); the Neo4j :Application node is the
+// co-primary projection of the same envelope and must not diverge on analyzer identity.
+
+describe(":Application node carries analyzer identity (issue #43)", () => {
+  test("version matches package.json (the same source the JSON envelope's analyzer.version uses)", () => {
+    const appNode = rows.nodes.find((n) => n.labels.includes("Application"));
+    expect(appNode, "no :Application node projected").toBeDefined();
+    expect(appNode!.props.analyzer_version).toBe(pkg.version);
+    expect(appNode!.props.analyzer_name).toBe("codeanalyzer-typescript");
+  });
+});
+
+// ---- Class inheritance: EXTENDS/IMPLEMENTS (issue #33) ------------------------------------------
+// dataflow-app's src/hierarchy.ts is a minimal, first-party heritage fixture: `Rectangle implements
+// Shape`, `Square extends Rectangle implements Labeled`, `ColoredShape extends Shape` (interface→
+// interface heritage — issue #45).
+
+describe("neo4j inheritance edges (issue #33)", () => {
+  test("EXTENDS and IMPLEMENTS are declared in the schema catalog", () => {
+    expect(relByType.has("TS_EXTENDS")).toBe(true);
+    expect(relByType.has("TS_IMPLEMENTS")).toBe(true);
+  });
+
+  function nodeBySignature(signature: string) {
+    return rows.nodes.find((n) => n.props.signature === signature);
+  }
+
+  test("hierarchy.ts's first-party heritage projects the expected, non-dangling EXTENDS/IMPLEMENTS edges", () => {
+    const square = nodeBySignature("src/hierarchy.Square");
+    const rectangle = nodeBySignature("src/hierarchy.Rectangle");
+    const shape = nodeBySignature("src/hierarchy.Shape");
+    const labeled = nodeBySignature("src/hierarchy.Labeled");
+    expect(square, "Square node").toBeDefined();
+    expect(rectangle, "Rectangle node").toBeDefined();
+    expect(shape, "Shape node").toBeDefined();
+    expect(labeled, "Labeled node").toBeDefined();
+
+    const ext = rows.edges.filter((e) => e.type === "TS_EXTENDS");
+    const impl = rows.edges.filter((e) => e.type === "TS_IMPLEMENTS");
+    expect(ext.length).toBeGreaterThan(0);
+    expect(impl.length).toBeGreaterThan(0);
+
+    expect(ext.some((e) => e.from.value === square!.value && e.to.value === rectangle!.value)).toBe(true);
+    expect(impl.some((e) => e.from.value === rectangle!.value && e.to.value === shape!.value)).toBe(true);
+    expect(impl.some((e) => e.from.value === square!.value && e.to.value === labeled!.value)).toBe(true);
+
+    const nodeValues = new Set(rows.nodes.map((n) => n.value));
+    for (const e of [...ext, ...impl]) {
+      expect(nodeValues.has(e.from.value), `dangling EXTENDS/IMPLEMENTS source ${e.from.value}`).toBe(true);
+      expect(nodeValues.has(e.to.value), `dangling EXTENDS/IMPLEMENTS target ${e.to.value}`).toBe(true);
+    }
+  });
+
+  test("interface-extends-interface projects an EXTENDS edge with an Interface source AND target (issue #45)", () => {
+    const coloredShape = nodeBySignature("src/hierarchy.ColoredShape");
+    const shape = nodeBySignature("src/hierarchy.Shape");
+    expect(coloredShape, "ColoredShape node").toBeDefined();
+    expect(shape, "Shape node").toBeDefined();
+    expect(specificLabel(coloredShape!.labels)).toBe("TSInterface");
+    expect(specificLabel(shape!.labels)).toBe("TSInterface");
+
+    const ext = rows.edges.filter((e) => e.type === "TS_EXTENDS");
+    expect(ext.some((e) => e.from.value === coloredShape!.value && e.to.value === shape!.value)).toBe(true);
+
+    const nodeValues = new Set(rows.nodes.map((n) => n.value));
+    expect(nodeValues.has(coloredShape!.value)).toBe(true);
+    expect(nodeValues.has(shape!.value)).toBe(true);
   });
 });

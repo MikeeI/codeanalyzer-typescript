@@ -1,26 +1,32 @@
 /**
- * The declarative Neo4j schema — the single in-repo source of truth for the graph contract: node
- * labels with their keys and typed properties, relationship types and their endpoints, and the
- * Cypher DDL (uniqueness constraints + indexes). The constraints are DERIVED from the node labels
- * (one per distinct mergeLabel/key) so a new label brings its own constraint — there is no second
- * list to keep in sync. `--emit schema` serializes all of this to a machine-readable schema.json,
- * and the conformance test (test/neo4j-schema.test.ts) asserts the real emitter never produces a
- * label / relationship / property that isn't declared here — so this file cannot silently drift
- * from project.ts.
+ * The declarative Neo4j schema (schema v2) — the single in-repo source of truth for the graph
+ * contract: node labels with their keys and typed properties, relationship types and their
+ * endpoints, and the Cypher DDL (uniqueness constraints + indexes). Constraints are DERIVED from
+ * the node labels (one per distinct mergeLabel/key). `--emit schema` serializes all of this to
+ * schema.neo4j.json, and the conformance test (test/neo4j-schema.test.ts) asserts the emitter
+ * never produces an undeclared label / relationship / property.
  *
- * SCHEMA_VERSION is the contract version: bump MAJOR on a breaking change (renamed/removed label,
- * relationship or key), MINOR on an additive change (new label/rel/property). It is stamped onto
- * the :Application node of every emitted graph so any consumer can detect a producer/consumer
- * mismatch at runtime.
+ * Schema v2 mirrors the additive-CPG JSON (canonical-schema.md): every tree/body node is a graph
+ * node keyed on its `can://` id under the shared MERGE label `CanNode` (one uniqueness constraint,
+ * uniform edge endpoints), carrying a specific kind label; containment renders as HAS_x / DECLARES
+ * edges and every typed overlay (call_graph, cfg/cdg/ddg/summary, param_in/param_out) as a typed
+ * relationship. At 2.0.0 (issue #66) the vocabulary is namespaced for TypeScript: every specific
+ * node label is `TS`-prefixed (`TSModule`, `TSCallable`, ...; the shared MERGE labels `CanNode` and
+ * `Application` stay bare) and every relationship type is `TS_`-prefixed (`TS_CALLS`, ...) — this
+ * lets a shared multi-language database attribute TS-origin graph elements (epic #64) without a
+ * transitional dual-labeling step.
+ *
+ * SCHEMA_VERSION: MAJOR on a breaking change (renamed/removed label, relationship or key), MINOR
+ * on additive. v2 is a MAJOR bump from v1 (keys moved signature→can:// id; labels reshaped).
  */
-export const SCHEMA_VERSION = "1.1.0";
+export const SCHEMA_VERSION = "2.0.0";
 
 export type PropType = "string" | "integer" | "float" | "boolean" | "string[]" | "integer[]";
 
 export interface NodeLabel {
   /** The specific label (also the key in NODE_LABELS). */
   label: string;
-  /** The label the uniqueness constraint / MERGE is on (`Symbol` for signature-keyed nodes). */
+  /** The label the uniqueness constraint / MERGE is on (`CanNode` for can://-id-keyed nodes). */
   mergeLabel: string;
   key: string;
   properties: Record<string, PropType>;
@@ -34,312 +40,136 @@ export interface RelType {
 }
 
 /** Labels layered onto a node in addition to its primary/specific label. */
-export const MARKER_LABELS = ["Entrypoint"] as const;
+export const MARKER_LABELS = [] as const;
 
-/**
- * Language-namespace twins (schema 1.1.0, additive): every specific and marker label is also
- * stamped as `TS<Label>` so a shared multi-language database can attribute TS nodes (epic #64,
- * issue #65). The shared merge label `Symbol` deliberately has NO twin — MERGE targets, keys and
- * constraints are unchanged. The bare labels drop (and rel types gain `TS_`) in schema 2.0.0.
- */
+/** The namespace prefix every specific node label and relationship type carries at 2.0.0 (#66). */
 export const TS_PREFIX = "TS";
 
-/** The TS-prefixed twin of a specific or marker label. */
-export const twinOf = (label: string): string => `${TS_PREFIX}${label}`;
-
-/**
- * Expand a projection label set with its twins: order preserved, `Symbol` skipped, idempotent.
- * Any label already starting with `TS` is treated as a twin and never re-prefixed — so no bare
- * label may legitimately begin with `TS`.
- */
-export function withTwins(labels: string[]): string[] {
-  const out = [...labels];
-  for (const l of labels) {
-    if (l === "Symbol" || l.startsWith(TS_PREFIX)) continue;
-    const t = twinOf(l);
-    if (!out.includes(t)) out.push(t);
-  }
-  return out;
-}
-
+/** The shared MERGE label for every can://-id-keyed node (one constraint; uniform edge endpoints). */
+const CAN = "CanNode";
 const SPAN = { start_line: "integer", end_line: "integer" } as const;
-const ENTRYPOINT = {
-  framework: "string",
-  detection_source: "string",
-  route_path: "string",
-  http_methods: "string[]",
-  entrypoint_count: "integer",
-} as const;
+/** Every can://-keyed node carries these. */
+const COMMON = { id: "string", kind: "string", _module: "string" } as const;
 
 export const NODE_LABELS: NodeLabel[] = [
   {
-    label: "Application",
+    label: "TSApplication",
     mergeLabel: "Application",
-    key: "name",
-    properties: { name: "string", schema_version: "string" },
-  },
-  {
-    label: "Module",
-    mergeLabel: "Module",
-    key: "file_key",
-    properties: {
-      file_key: "string",
-      module_name: "string",
-      is_tsx: "boolean",
-      is_declaration_file: "boolean",
-      content_hash: "string",
-      last_modified: "integer",
-      file_size: "integer",
-      _module: "string",
-    },
-  },
-  {
-    label: "Class",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      code: "string",
-      base_classes: "string[]",
-      implements_types: "string[]",
-      type_parameter_names: "string[]",
-      docstring: "string",
-      is_abstract: "boolean",
-      is_exported: "boolean",
-      is_ambient: "boolean",
-      ...SPAN,
-      ...ENTRYPOINT,
-      _module: "string",
-    },
-  },
-  {
-    label: "Interface",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      code: "string",
-      base_classes: "string[]",
-      type_parameter_names: "string[]",
-      call_signatures: "string[]",
-      index_signatures: "string[]",
-      docstring: "string",
-      is_exported: "boolean",
-      is_ambient: "boolean",
-      ...SPAN,
-      _module: "string",
-    },
-  },
-  {
-    label: "Enum",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      code: "string",
-      member_names: "string[]",
-      member_values: "string[]",
-      docstring: "string",
-      is_const: "boolean",
-      is_exported: "boolean",
-      is_ambient: "boolean",
-      ...SPAN,
-      _module: "string",
-    },
-  },
-  {
-    label: "TypeAlias",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      code: "string",
-      aliased_type: "string",
-      type_parameter_names: "string[]",
-      docstring: "string",
-      is_exported: "boolean",
-      is_ambient: "boolean",
-      ...SPAN,
-      _module: "string",
-    },
-  },
-  {
-    label: "Namespace",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      docstring: "string",
-      is_exported: "boolean",
-      is_ambient: "boolean",
-      ...SPAN,
-      _module: "string",
-    },
-  },
-  {
-    label: "Callable",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      path: "string",
-      kind: "string",
-      return_type: "string",
-      cyclomatic_complexity: "integer",
-      code: "string",
-      code_start_line: "integer",
-      ...SPAN,
-      accessibility: "string",
-      accessor_kind: "string",
-      docstring: "string",
-      type_parameter_names: "string[]",
-      parameters_json: "string",
-      accessed_symbols_json: "string",
-      is_static: "boolean",
-      is_abstract: "boolean",
-      is_async: "boolean",
-      is_generator: "boolean",
-      is_optional: "boolean",
-      is_readonly: "boolean",
-      is_exported: "boolean",
-      is_ambient: "boolean",
-      is_implicit: "boolean",
-      ...ENTRYPOINT,
-      _module: "string",
-    },
-  },
-  {
-    label: "External",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: { signature: "string", name: "string", module: "string" },
-  },
-  {
-    // A first-party anonymous callback Jelly resolves as a call endpoint but the symbol table never
-    // names. Thin (no code/params) — the signature carries identity; DECLARES links it to its host.
-    label: "AnonymousCallable",
-    mergeLabel: "Symbol",
-    key: "signature",
-    properties: {
-      signature: "string",
-      name: "string",
-      path: "string",
-      start_line: "integer",
-      start_column: "integer",
-      _module: "string",
-    },
-  },
-  { label: "Package", mergeLabel: "Package", key: "name", properties: { name: "string" } },
-  {
-    label: "Decorator",
-    mergeLabel: "Decorator",
-    key: "qualified_name",
-    properties: { qualified_name: "string", name: "string" },
-  },
-  {
-    label: "CallSite",
-    mergeLabel: "CallSite",
     key: "id",
     properties: {
-      id: "string",
-      method_name: "string",
-      receiver_expr: "string",
-      receiver_type: "string",
-      argument_types: "string[]",
-      type_arguments: "string[]",
-      return_type: "string",
-      callee_signature: "string",
-      is_constructor_call: "boolean",
-      is_optional_chain: "boolean",
-      start_line: "integer",
-      start_column: "integer",
-      end_line: "integer",
-      end_column: "integer",
-      _module: "string",
+      id: "string", schema_version: "string", language: "string", max_level: "integer", k_limit: "integer",
+      // Analyzer identity — mirrors the JSON envelope's `analyzer{name,version}` (issue #43),
+      // namespaced (not bare name/version) to avoid colliding with the app-name param / every
+      // other CanNode's bare `name`.
+      analyzer_name: "string", analyzer_version: "string",
     },
   },
   {
-    label: "Attribute",
-    mergeLabel: "Attribute",
+    label: "TSModule",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, name: "string", is_tsx: "boolean", is_declaration_file: "boolean", content_hash: "string", ...SPAN },
+  },
+  {
+    label: "TSClass",
+    mergeLabel: CAN,
     key: "id",
     properties: {
-      id: "string",
-      name: "string",
-      type: "string",
-      initializer: "string",
-      accessibility: "string",
-      docstring: "string",
-      is_static: "boolean",
-      is_readonly: "boolean",
-      is_optional: "boolean",
-      is_abstract: "boolean",
-      ...SPAN,
-      _module: "string",
+      ...COMMON, signature: "string", name: "string", base_classes: "string[]", implements_types: "string[]",
+      is_abstract: "boolean", is_exported: "boolean", is_ambient: "boolean", ...SPAN,
     },
   },
   {
-    label: "Variable",
-    mergeLabel: "Variable",
+    label: "TSInterface",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, signature: "string", name: "string", base_classes: "string[]", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
+  },
+  {
+    label: "TSEnum",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, signature: "string", name: "string", is_const: "boolean", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
+  },
+  {
+    label: "TSTypeAlias",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, signature: "string", name: "string", aliased_type: "string", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
+  },
+  {
+    label: "TSNamespace",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, signature: "string", name: "string", is_exported: "boolean", is_ambient: "boolean", ...SPAN },
+  },
+  {
+    label: "TSCallable",
+    mergeLabel: CAN,
     key: "id",
     properties: {
-      id: "string",
-      name: "string",
-      type: "string",
-      initializer: "string",
-      scope: "string",
-      declaration_kind: "string",
-      is_readonly: "boolean",
-      is_exported: "boolean",
+      ...COMMON, signature: "string", name: "string", return_type: "string", cyclomatic_complexity: "integer",
+      accessibility: "string", accessor_kind: "string", is_static: "boolean", is_abstract: "boolean",
+      is_async: "boolean", is_generator: "boolean", is_exported: "boolean", is_ambient: "boolean", is_implicit: "boolean",
       ...SPAN,
-      _module: "string",
     },
+  },
+  { label: "TSField", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", type: "string", ...SPAN } },
+  {
+    // A statement / synthetic vertex inside a callable body (kind = statement|call|entry|exit|
+    // formal_in|formal_out|actual_in|actual_out). `callee` on call nodes; `of`/`parent` on synthetics.
+    label: "TSBodyNode",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, of: "string", parent: "string", callee: "string", ...SPAN },
+  },
+  { label: "TSExternal", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", module: "string" } },
+  {
+    label: "TSAnonymousCallable",
+    mergeLabel: CAN,
+    key: "id",
+    properties: { ...COMMON, name: "string", path: "string", start_line: "integer", start_column: "integer" },
   },
 ];
 
-const DECL_TARGETS = ["Class", "Interface", "Enum", "TypeAlias", "Namespace", "Callable"];
-
 export const REL_TYPES: RelType[] = [
-  { type: "HAS_MODULE", from: ["Application"], to: ["Module"], properties: {} },
-  { type: "DECLARES", from: ["Module", "Namespace", "Class", "Callable"], to: DECL_TARGETS, properties: {} },
-  { type: "HAS_METHOD", from: ["Class", "Interface"], to: ["Callable"], properties: {} },
-  { type: "HAS_ATTRIBUTE", from: ["Class", "Interface"], to: ["Attribute"], properties: {} },
-  { type: "DECLARES_VAR", from: ["Module", "Namespace", "Callable"], to: ["Variable"], properties: {} },
-  { type: "HAS_CALLSITE", from: ["Callable"], to: ["CallSite"], properties: {} },
-  { type: "RESOLVES_TO", from: ["CallSite"], to: ["Callable", "External"], properties: {} },
+  { type: "TS_HAS_MODULE", from: ["TSApplication"], to: ["TSModule"], properties: {} },
   {
-    type: "CALLS",
-    from: ["Callable"],
-    to: ["Callable", "External"],
-    properties: { weight: "integer", provenance: "string[]", dispatch: "string", external: "boolean", module: "string" },
+    type: "TS_DECLARES",
+    from: ["TSModule", "TSNamespace", "TSCallable"],
+    to: ["TSClass", "TSInterface", "TSEnum", "TSTypeAlias", "TSNamespace", "TSCallable"],
+    properties: {},
   },
-  { type: "EXTENDS", from: ["Class", "Interface"], to: ["Class", "Interface"], properties: {} },
-  { type: "IMPLEMENTS", from: ["Class"], to: ["Interface"], properties: {} },
+  { type: "TS_HAS_METHOD", from: ["TSClass", "TSInterface"], to: ["TSCallable"], properties: {} },
+  { type: "TS_HAS_FIELD", from: ["TSModule", "TSClass", "TSInterface", "TSEnum", "TSNamespace"], to: ["TSField"], properties: {} },
+  { type: "TS_HAS_BODY_NODE", from: ["TSCallable", "TSAnonymousCallable"], to: ["TSBodyNode"], properties: {} },
+  { type: "TS_RESOLVES_TO", from: ["TSBodyNode"], to: ["TSCallable", "TSExternal", "TSAnonymousCallable"], properties: {} },
   {
-    type: "IMPORTS",
-    from: ["Module"],
-    to: ["Module", "Package"],
-    properties: { imported_names: "string[]", import_kinds: "string[]", is_type_only: "boolean" },
+    type: "TS_CALLS",
+    from: ["TSCallable", "TSAnonymousCallable"],
+    to: ["TSCallable", "TSExternal", "TSAnonymousCallable"],
+    properties: { weight: "integer", prov: "string[]" },
   },
-  { type: "RE_EXPORTS", from: ["Module"], to: ["Module", "Package"], properties: {} },
-  { type: "MEMBER_OF", from: ["External"], to: ["Package"], properties: {} },
-  {
-    type: "DECORATED_BY",
-    from: ["Class", "Callable", "Attribute"],
-    to: ["Decorator"],
-    properties: { positional_arguments: "string[]", keyword_arguments_json: "string", start_line: "integer", end_line: "integer" },
-  },
+  // `_k` is the relationship-identity discriminant (internal): TS_CFG_NEXT merges per `kind`
+  // (a conditional's true/false pair), TS_DDG per `(var, prov)` (one dependence per variable, plus
+  // the prov split) — a plain endpoint-pair MERGE would collapse legitimately-distinct edges
+  // (issue #70).
+  { type: "TS_CFG_NEXT", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { kind: "string", _k: "string" } },
+  { type: "TS_CDG", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: {} },
+  { type: "TS_DDG", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string", prov: "string[]", _k: "string" } },
+  { type: "TS_SUMMARY", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
+  { type: "TS_PARAM_IN", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
+  { type: "TS_PARAM_OUT", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
+  // Inheritance, projected from the `extends_ids`/`implements_ids` node props (schema/v2/emit.ts) —
+  // resolved-only: an unresolved (external/library) supertype never reaches here. A `to` of `TSClass`
+  // covers TS's `implements SomeClass` (structural, not just interfaces); an interface may itself
+  // `extends` a class's instance type, hence `TS_EXTENDS` also allows a `TSInterface` source.
+  { type: "TS_EXTENDS", from: ["TSClass", "TSInterface"], to: ["TSClass", "TSInterface"], properties: {} },
+  { type: "TS_IMPLEMENTS", from: ["TSClass"], to: ["TSInterface", "TSClass"], properties: {} },
 ];
 
 // ----------------------------------------------------------------------------------------------
-// Cypher DDL — shared by both writers, run BEFORE any load so MERGE uses an index seek (not a label
-// scan) and the identity invariant is enforced by the database. Every statement is idempotent
-// (`IF NOT EXISTS`, which Neo4j matches on schema+type, so renames never duplicate a constraint).
+// Cypher DDL — run BEFORE any load so MERGE uses an index seek. Idempotent (`IF NOT EXISTS`).
 // ----------------------------------------------------------------------------------------------
 
 /** One uniqueness constraint per distinct (mergeLabel, key) in NODE_LABELS — derived, never drifts. */
@@ -362,9 +192,11 @@ export const CONSTRAINTS: readonly string[] = uniquenessConstraints();
 
 /** Curated performance indexes (not 1:1 with labels, so declared explicitly). */
 export const INDEXES: readonly string[] = [
-  "CREATE INDEX callable_name IF NOT EXISTS FOR (c:Callable) ON (c.name)",
-  "CREATE INDEX decorator_name IF NOT EXISTS FOR (d:Decorator) ON (d.name)",
-  "CREATE FULLTEXT INDEX code_fts IF NOT EXISTS FOR (c:Callable) ON EACH [c.code, c.docstring]",
+  "CREATE INDEX callable_name IF NOT EXISTS FOR (c:TSCallable) ON (c.name)",
+  "CREATE INDEX cannode_kind IF NOT EXISTS FOR (n:CanNode) ON (n.kind)",
+  // Backs the bolt writer's per-module edge-delete + vanished-decl sweep, which anchor on
+  // `(:CanNode {_module})` — without this they would scan the whole node store.
+  "CREATE INDEX cannode_module IF NOT EXISTS FOR (n:CanNode) ON (n._module)",
 ];
 
 export interface SchemaDocument {
@@ -375,16 +207,6 @@ export interface SchemaDocument {
   relationship_types: RelType[];
   constraints: readonly string[];
   indexes: readonly string[];
-  /** Specific/marker label → its TS-prefixed twin (both are present on every emitted node). */
-  label_twins: Record<string, string>;
-}
-
-/** One twin per specific label + per marker label — derived from the catalogs, never drifts. */
-function labelTwins(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const n of NODE_LABELS) out[n.label] = twinOf(n.label);
-  for (const m of MARKER_LABELS) out[m] = twinOf(m);
-  return out;
 }
 
 /** Build the full machine-readable schema document emitted by `--emit schema`. */
@@ -397,6 +219,5 @@ export function buildSchemaDocument(): SchemaDocument {
     relationship_types: REL_TYPES,
     constraints: CONSTRAINTS,
     indexes: INDEXES,
-    label_twins: labelTwins(),
   };
 }

@@ -2,7 +2,7 @@
  * The canonical CLDK analysis schema for TypeScript.
  *
  * Mirrors the identity-only Python schema (codeanalyzer-python/.../py_schema.py) field for
- * field on the invariant spine — `TSApplication { symbol_table, call_graph, entrypoints }`,
+ * field on the invariant spine — `TSApplication { symbol_table, call_graph, external_symbols }`,
  * `Module → Class/Callable` nesting, identity-only `TSCallEdge` whose `source`/`target` are
  * bare signature strings — and extends it at the leaves with TypeScript-native node kinds
  * (interface / type-alias / enum / namespace) and typed fields (generics, modifiers, ...).
@@ -12,6 +12,19 @@
  * The matching Pydantic models live in python-sdk/cldk/models/typescript/models.py and MUST be
  * co-evolved with this file.
  */
+
+// ----------------------------------------------------------------------------------------------
+// Span (schema-v2) — the one universal attribute. `bytes` are char offsets into the owning
+// module's `source` blob, so `source.slice(bytes[0], bytes[1])` reproduces the node's text
+// (what the per-node `code` field used to hold). `start`/`end` are [line, column], 1-based, for
+// display and addressing. Captured on every container node during the AST walk (builders.ts).
+// ----------------------------------------------------------------------------------------------
+
+export interface TSSpan {
+  start: [number, number]; // [line, column], 1-based
+  end: [number, number]; // [line, column], 1-based
+  bytes: [number, number]; // [startOffset, endOffset], char offsets into module.source
+}
 
 // ----------------------------------------------------------------------------------------------
 // Leaf models
@@ -50,18 +63,8 @@ export interface TSComment {
   end_column: number;
 }
 
-export interface TSSymbol {
-  name: string;
-  scope: string; // local | parameter | class | module | global
-  kind: string; // variable | parameter | property | function | class | interface | enum | type_alias | module
-  type: string | null;
-  qualified_name: string | null;
-  is_builtin: boolean;
-  lineno: number;
-  col_offset: number;
-}
-
 export interface TSVariableDeclaration {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   type: string | null;
   initializer: string | null;
@@ -122,6 +125,7 @@ export interface TSCallsite {
   start_column: number;
   end_line: number;
   end_column: number;
+  bytes?: [number, number]; // schema-v2: char offsets [start, end] into module.source
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -146,6 +150,7 @@ export interface TSOverloadSignature {
 }
 
 export interface TSCallable {
+  span?: TSSpan; // schema-v2 precise span (line/col + char offsets into module.source)
   name: string;
   path: string; // file path of the declaration
   signature: string; // e.g. src/user.UserService.getUser — the edge id
@@ -158,13 +163,11 @@ export interface TSCallable {
   start_line: number;
   end_line: number;
   code_start_line: number;
-  accessed_symbols: TSSymbol[];
   call_sites: TSCallsite[];
   inner_callables: Record<string, TSCallable>;
   inner_classes: Record<string, TSClass>;
   local_variables: TSVariableDeclaration[];
   cyclomatic_complexity: number;
-  entrypoints: TSEntrypoint[]; // non-empty ⇒ this callable is an entrypoint (level-2 finders populate)
   // --- TypeScript-native typed fields ---
   kind: TSCallableKind;
   accessibility: string | null; // public | private | protected | null
@@ -186,6 +189,7 @@ export interface TSCallable {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSClassAttribute {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   type: string | null;
   comments: TSComment[];
@@ -205,6 +209,7 @@ export interface TSClassAttribute {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSClass {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   signature: string; // e.g. src/user.UserService
   comments: TSComment[];
@@ -216,7 +221,6 @@ export interface TSClass {
   methods: Record<string, TSCallable>;
   attributes: Record<string, TSClassAttribute>;
   inner_classes: Record<string, TSClass>;
-  entrypoints: TSEntrypoint[]; // class-level entrypoint (e.g. a framework @Controller); empty otherwise
   is_abstract: boolean;
   is_exported: boolean;
   is_ambient: boolean;
@@ -229,6 +233,7 @@ export interface TSClass {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSInterface {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   signature: string;
   comments: TSComment[];
@@ -250,6 +255,7 @@ export interface TSInterface {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSEnumMember {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   value: string | null; // initializer text or computed const value
   start_line: number;
@@ -257,6 +263,7 @@ export interface TSEnumMember {
 }
 
 export interface TSEnum {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   signature: string;
   comments: TSComment[];
@@ -274,6 +281,7 @@ export interface TSEnum {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSTypeAlias {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   signature: string;
   comments: TSComment[];
@@ -291,6 +299,7 @@ export interface TSTypeAlias {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSNamespace {
+  span?: TSSpan; // schema-v2 precise span
   name: string;
   signature: string;
   comments: TSComment[];
@@ -312,6 +321,8 @@ export interface TSNamespace {
 // ----------------------------------------------------------------------------------------------
 
 export interface TSModule {
+  span?: TSSpan; // schema-v2 precise span (whole file)
+  source?: string | null; // schema-v2: full file text; every node's text slices off this
   file_path: string;
   module_name: string; // the file key minus extension (== signature prefix)
   imports: TSImport[];
@@ -349,19 +360,6 @@ export interface TSCallEdge {
 }
 
 // ----------------------------------------------------------------------------------------------
-// Entrypoint (optional; level-2 / framework finders populate it — empty for level 1).
-// Embedded on the owning TSCallable/TSClass, so it carries no signature/source_file of its own.
-// ----------------------------------------------------------------------------------------------
-
-export interface TSEntrypoint {
-  framework: string;
-  detection_source: string; // decorator | base_class | convention | extension | ...
-  route_path: string | null;
-  http_methods: string[];
-  tags: Record<string, string>;
-}
-
-// ----------------------------------------------------------------------------------------------
 // Application (root)
 // ----------------------------------------------------------------------------------------------
 
@@ -395,6 +393,8 @@ export interface TSApplication {
   call_graph: TSCallEdge[];
   external_symbols: Record<string, TSExternalSymbol>;
   synthesized_callables: Record<string, TSSynthesizedCallable>;
+  /** Level-3 CFG/PDG/SDG section — present only at `-a 3` (see schema/graphs.ts). */
+  program_graphs?: import("./graphs").ProgramGraphs;
 }
 
 // ==============================================================================================

@@ -13,15 +13,15 @@ import { CONSTRAINTS, INDEXES } from "./schema";
 
 const BATCH = 500;
 
-export function renderCypher(rows: GraphRows, appName: string): string {
+export function renderCypher(rows: GraphRows, appId: string): string {
   const out: string[] = [];
 
   out.push("// ── constraints & indexes ──");
   for (const stmt of CONSTRAINTS) out.push(`${stmt};`);
   for (const stmt of INDEXES) out.push(`${stmt};`);
 
-  out.push("", "// ── wipe this project's prior subgraph (externals/packages/decorators are shared) ──");
-  out.push(wipe(appName));
+  out.push("", "// ── wipe this project's prior subgraph (external targets are shared) ──");
+  out.push(wipe(appId));
 
   out.push("", "// ── nodes ──");
   for (const block of nodeStatements(rows.nodes)) out.push(block);
@@ -33,12 +33,12 @@ export function renderCypher(rows: GraphRows, appName: string): string {
   return out.join("\n");
 }
 
-function wipe(appName: string): string {
-  const name = cypherValue(appName);
+function wipe(appId: string): string {
+  const id = cypherValue(appId);
   return [
-    `MATCH (a:Application {name: ${name}})`,
-    "OPTIONAL MATCH (a)-[:HAS_MODULE]->(m:Module)",
-    "OPTIONAL MATCH (m)-[:DECLARES|HAS_METHOD|HAS_ATTRIBUTE|DECLARES_VAR|HAS_CALLSITE*1..]->(x)",
+    `MATCH (a:Application {id: ${id}})`,
+    "OPTIONAL MATCH (a)-[:TS_HAS_MODULE]->(m:TSModule)",
+    "OPTIONAL MATCH (m)-[:TS_DECLARES|TS_HAS_METHOD|TS_HAS_FIELD|TS_HAS_BODY_NODE*1..]->(x)",
     "DETACH DELETE x, m, a;",
   ].join("\n");
 }
@@ -81,22 +81,24 @@ function nodeStatements(nodes: NodeRow[]): string[] {
 function edgeStatements(edges: EdgeRow[]): string[] {
   const groups = new Map<string, EdgeRow[]>();
   for (const e of edges) {
-    const k = `${e.type}|${e.from.label}.${e.from.keyProp}|${e.to.label}.${e.to.keyProp}`;
+    const k = `${e.type}|${e.from.label}.${e.from.keyProp}|${e.to.label}.${e.to.keyProp}|${e.key !== undefined}`;
     (groups.get(k) ?? groups.set(k, []).get(k)!).push(e);
   }
 
   const blocks: string[] = [];
   for (const group of groups.values()) {
     const { type, from, to } = group[0];
+    // Discriminated relationships MERGE on `{_k}` — see EdgeRow.key (issue #70).
+    const keyed = group[0].key !== undefined;
     for (const batch of chunk(group, BATCH)) {
       const list = batch
-        .map((e) => `  {f: ${cypherValue(e.from.value)}, t: ${cypherValue(e.to.value)}, p: ${cypherMap(e.props)}}`)
+        .map((e) => `  {f: ${cypherValue(e.from.value)}, t: ${cypherValue(e.to.value)}, ${keyed ? `k: ${cypherValue(e.key!)}, ` : ""}p: ${cypherMap(e.props)}}`)
         .join(",\n");
       blocks.push(
         `UNWIND [\n${list}\n] AS row\n` +
           `MATCH (a:${from.label} {${from.keyProp}: row.f})\n` +
           `MATCH (b:${to.label} {${to.keyProp}: row.t})\n` +
-          `MERGE (a)-[r:${type}]->(b)\n` +
+          `MERGE (a)-[r:${type}${keyed ? " {_k: row.k}" : ""}]->(b)\n` +
           `SET r += row.p;`,
       );
     }
