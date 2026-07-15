@@ -15,6 +15,7 @@ import neo4j, { type Driver } from "neo4j-driver";
 import { type BoltConfig, boltWriter, CONSTRAINTS, INDEXES, project } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
+import { toV2 } from "../src/schema/v2";
 import { Logger } from "../src/utils";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
@@ -36,7 +37,9 @@ function optsFor(overrides: Partial<AnalysisOptions> = {}): AnalysisOptions {
     neo4jUser: "neo4j",
     neo4jPassword: "",
     neo4jDatabase: null,
-    analysisLevel: 1,
+    // >= 2: the call graph (incl. jelly) solve is skipped below that level since the v2 emitter
+    // discards it at -a 1 (#46 sibling fix, 6078c7e) — this suite asserts on TS_CALLS edges.
+    analysisLevel: 2,
     graphs: ["cfg", "dfg", "pdg", "sdg"],
     graphFieldDepth: 3,
     jobs: 1,
@@ -89,7 +92,8 @@ containerSuite("neo4j bolt writer", () => {
   test(
     "full push materializes the whole graph + schema",
     async () => {
-      const rows = project(await analyze(optsFor()), "sample-app");
+      const opts = optsFor();
+      const rows = project(toV2(await analyze(opts), opts));
       await boltWriter(rows, cfg, log, true);
 
       // Every projected node/edge lands (the fixture has no library deps, so endpoints all resolve).
@@ -128,7 +132,8 @@ containerSuite("neo4j bolt writer", () => {
   test(
     "re-pushing identical analysis is idempotent",
     async () => {
-      const rows = project(await analyze(optsFor()), "sample-app");
+      const opts = optsFor();
+      const rows = project(toV2(await analyze(opts), opts));
       await boltWriter(rows, cfg, log, true);
       expect(await num("MATCH (n) RETURN count(n)")).toBe(rows.nodes.length);
       expect(await num("MATCH ()-[r]->() RETURN count(r)")).toBe(rows.edges.length);
@@ -139,11 +144,12 @@ containerSuite("neo4j bolt writer", () => {
   test(
     "a full run prunes a module whose source vanished",
     async () => {
-      const app = await analyze(optsFor());
+      const opts = optsFor();
+      const app = await analyze(opts);
       const victim = Object.keys(app.symbol_table).sort()[0];
       delete app.symbol_table[victim];
 
-      const rows = project(app, "sample-app");
+      const rows = project(toV2(app, opts));
       await boltWriter(rows, cfg, log, true);
 
       // The victim's nodes are gone.
@@ -175,7 +181,8 @@ containerSuite("neo4j bolt writer", () => {
       }
 
       // A full 2.0.0 push against the same DB must detect the version mismatch and wipe the residue.
-      const rows = project(await analyze(optsFor()), "sample-app");
+      const opts = optsFor();
+      const rows = project(toV2(await analyze(opts), opts));
       await boltWriter(rows, cfg, log, true);
 
       // Exactly one :Application survives — the fresh v2 one (id set, version bumped). The 1.x app,
