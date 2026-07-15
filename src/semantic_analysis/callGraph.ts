@@ -63,7 +63,10 @@ export function buildCallGraph(
   for (const node of callExprIndex.values()) {
     if (Node.isNewExpression(node)) {
       const r = resolveCalleeSignature(node, root, allSignatures);
-      if (r?.isConstructor) instantiated.add(r.signature.slice(0, -".constructor".length));
+      // External constructors are never project subtypes, so they never feed RTA expansion; their
+      // signature (`${module}.${member}`) also doesn't carry the `.constructor` suffix a dot-split
+      // below would assume.
+      if (r?.isConstructor && !r.external) instantiated.add(r.signature.slice(0, -".constructor".length));
     }
   }
 
@@ -128,6 +131,21 @@ export function buildCallGraph(
         continue;
       }
       const r = resolveCalleeSignature(node, root, allSignatures);
+      if (r?.external) {
+        // Checker-known external target (a node_modules package or the TS stdlib) — same gate as
+        // the import-index fallback below: phantom edges are opt-in via `phantoms`.
+        if (phantoms) {
+          if (!external_symbols[r.signature]) {
+            external_symbols[r.signature] = { name: r.external.member, module: r.external.module };
+          }
+          site.callee_signature = r.signature;
+          addPhantomEdge(caller.signature, r.signature, r.external.module);
+          phantomCount++;
+        } else {
+          unresolved++;
+        }
+        continue; // never RTA-expand an external target: no dot-split on a ${module}.${member} id.
+      }
       if (!r) {
         // Phantom fallback: attribute the call to an imported/required external member.
         if (phantoms) {
