@@ -8,6 +8,7 @@
 //   - a bare global from lib.*.d.ts with no import at all (`eval`).
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
+import neo4j from "neo4j-driver";
 
 /** named-import bare call → phantom via the existing import-index fallback (unchanged by #53). */
 export function readsConfig(): string {
@@ -15,17 +16,27 @@ export function readsConfig(): string {
 }
 
 /**
- * `new Command()` is a bare named-import identifier, so the pre-existing import-index fallback
- * already resolves it — unaffected by #53. The member calls below are the new case: `cmd` is a
- * local `const`, not an import binding, so the syntactic index has nothing to key off of and only
- * checker-based resolution (this fix) can classify `cmd.name`/`cmd.description`/`cmd.parse` as
- * external.
+ * `new Command()` resolves through the checker path (#53): commander self-types, so the checker
+ * lands on its ClassDeclaration in node_modules → external constructor `commander.Command`. The
+ * import-index fallback would name it identically (named import of `Command` from `commander`),
+ * so both paths agree — the checker path just wins by running first. The member calls below are
+ * the case ONLY the checker can reach: `cmd` is a local `const`, not an import binding, so the
+ * syntactic index has nothing to key off of for `cmd.name`/`cmd.description`/`cmd.parse`.
  */
 export function makesCommand(): Command {
   const cmd = new Command();
   cmd.name("cli").description("demo");
   cmd.parse(["node", "cli.js"]);
   return cmd;
+}
+
+/**
+ * default-import member call → external `neo4j-driver.driver`. (No direct dependency of this repo
+ * has a *callable* default export — neo4j-driver's default is an object — so a default-import
+ * member call stands in for the `express()`-style bare default call.)
+ */
+export function makesDriver(): unknown {
+  return neo4j.driver("bolt://localhost");
 }
 
 /** a lib.*.d.ts global with no import at all — only the checker can classify its home. */

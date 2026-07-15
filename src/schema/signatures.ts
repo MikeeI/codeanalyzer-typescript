@@ -78,20 +78,29 @@ export function resolveCalleeDecl(call: Node): Node | undefined {
 }
 
 /** Where a checker-resolved declaration lives: in-project, a node_modules package, or the TS stdlib. */
-function externalHomeOf(decl: Node): { module: string } | null {
+export function externalHomeOf(decl: Node): { module: string } | null {
   const p = decl.getSourceFile().getFilePath();
+  // TS stdlib (lib.es5.d.ts, lib.dom.d.ts, ...) — checked BEFORE the generic node_modules match,
+  // which would otherwise claim these files as belonging to the package `typescript`.
+  if (/typescript\/lib\/lib\..*\.d\.ts$/.test(p)) return { module: "(builtin)" };
   // Take the LAST node_modules/<pkg> segment, not the first: under pnpm's virtual store a real
   // path looks like `node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>/...`, so the first match
   // would capture `.pnpm` instead of the package. The innermost occurrence is always the real home.
   const matches = [...p.matchAll(/node_modules\/(@[^/]+\/[^/]+|[^/]+)/g)];
-  if (matches.length) {
-    const pkg = matches[matches.length - 1][1];
-    // `@types/<pkg>` ships only type declarations FOR `<pkg>` — treat the runtime package as home
-    // so a package's identity is stable regardless of whether its types are bundled or DT-sourced.
-    return { module: pkg.startsWith("@types/") ? pkg.slice("@types/".length) : pkg };
+  if (!matches.length) return null;
+  const last = matches[matches.length - 1];
+  const pkg = last[1];
+  // DefinitelyTyped's node typings model the Node builtins one file per module — name the target
+  // by its import specifier (`node:fs`, `node:stream/consumers`) so this path and the import-index
+  // fallback (which keys phantoms by specifier) agree on one identity per logical callee, instead
+  // of collapsing every builtin under a single `node` module.
+  if (pkg === "@types/node") {
+    const rel = p.slice((last.index as number) + last[0].length + 1).replace(/(\.d)?\.ts$/, "");
+    return { module: rel === "index" ? "node" : `node:${rel}` };
   }
-  if (/typescript\/lib\/lib\..*\.d\.ts$/.test(p)) return { module: "(builtin)" };
-  return null;
+  // Any other `@types/<pkg>` ships only type declarations FOR `<pkg>` — treat the runtime package
+  // as home so a package's identity is stable whether its types are bundled or DT-sourced.
+  return { module: pkg.startsWith("@types/") ? pkg.slice("@types/".length) : pkg };
 }
 
 /**

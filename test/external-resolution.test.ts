@@ -12,9 +12,11 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type Node, Project } from "ts-morph";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
 import type { TSApplication, TSCallsite } from "../src/schema";
+import { externalHomeOf } from "../src/schema/signatures";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
 
@@ -68,12 +70,15 @@ describe("external call resolution (#53)", () => {
     // node:fs.readFileSync — a bare named-import call, already reachable via the pre-existing
     // import-index fallback (unaffected by #53; asserted here for shape parity).
     expect(ext.some((s) => s.includes("node:fs") && s.includes("readFileSync"))).toBe(true);
-    // `new Command()` — also a bare named-import identifier, so the import-index fallback already
-    // catches it too. The genuinely new case is `cmd.name()/.description()/.parse()`: member calls
-    // on `cmd`, a local `const`, not an import binding — the syntactic index has nothing to key off
+    // `new Command()` — checker-resolved to commander's ClassDeclaration (commander self-types);
+    // the import-index fallback would name it identically, so both paths agree on one identity.
+    // The genuinely checker-only case is `cmd.name()/.description()/.parse()`: member calls on
+    // `cmd`, a local `const`, not an import binding — the syntactic index has nothing to key off
     // of, so only checker-based resolution (this fix) reaches them.
     expect(ext.some((s) => s.startsWith("commander"))).toBe(true);
     expect(ext.some((s) => /^commander\.(name|description|parse)$/.test(s))).toBe(true);
+    // default-import member call (`neo4j.driver(...)`) → external neo4j-driver.driver.
+    expect(ext.some((s) => s.startsWith("neo4j-driver") && s.includes("driver"))).toBe(true);
     // a TS-stdlib global (eval, from lib.*.d.ts) with no import at all — checker-resolved, new in #53.
     expect(ext.some((s) => s.endsWith(".eval"))).toBe(true);
 
@@ -81,5 +86,55 @@ describe("external call resolution (#53)", () => {
     expect(calls.length).toBeGreaterThan(0);
     const resolved = calls.filter((c) => c.callee_signature != null);
     expect(resolved.length / calls.length).toBeGreaterThanOrEqual(0.75);
+  });
+});
+
+// ---- externalHomeOf unit tests: declaration path → module identity ---------------------------
+// Each case plants a declaration at a synthetic node_modules path in an in-memory ts-morph
+// project and asserts the module identity `externalHomeOf` derives from that path alone.
+function declAt(filePath: string): Node {
+  const project = new Project({ useInMemoryFileSystem: true });
+  const sf = project.createSourceFile(filePath, "export declare function f(): void;");
+  return sf.getFunctionOrThrow("f");
+}
+
+describe("externalHomeOf — declaration home classification (#53)", () => {
+  test("@types/node files map to their node: specifier, not a collapsed `node` module", () => {
+    expect(externalHomeOf(declAt("/proj/node_modules/@types/node/fs.d.ts"))).toEqual({ module: "node:fs" });
+    // nested builtin modules keep their subpath
+    expect(externalHomeOf(declAt("/proj/node_modules/@types/node/stream/consumers.d.ts"))).toEqual({
+      module: "node:stream/consumers",
+    });
+    // the root index (globals like `process`) has no per-module specifier → plain `node`
+    expect(externalHomeOf(declAt("/proj/node_modules/@types/node/index.d.ts"))).toEqual({ module: "node" });
+  });
+
+  test("other @types/<pkg> collapse onto the runtime package", () => {
+    expect(externalHomeOf(declAt("/proj/node_modules/@types/commander/index.d.ts"))).toEqual({ module: "commander" });
+  });
+
+  test("pnpm virtual-store paths resolve to the innermost package, not .pnpm", () => {
+    expect(externalHomeOf(declAt("/proj/node_modules/.pnpm/zod@3.24.1/node_modules/zod/index.d.ts"))).toEqual({
+      module: "zod",
+    });
+    expect(
+      externalHomeOf(declAt("/proj/node_modules/.pnpm/@types+node@22.0.0/node_modules/@types/node/fs.d.ts")),
+    ).toEqual({ module: "node:fs" });
+  });
+
+  test("scoped packages keep their full @scope/name", () => {
+    expect(externalHomeOf(declAt("/proj/node_modules/@scope/pkg/dist/index.d.ts"))).toEqual({ module: "@scope/pkg" });
+  });
+
+  test("the TS stdlib maps to (builtin), even though it lives under node_modules/typescript", () => {
+    expect(externalHomeOf(declAt("/proj/node_modules/typescript/lib/lib.es5.d.ts"))).toEqual({ module: "(builtin)" });
+    // non-lib typescript files are just the `typescript` package
+    expect(externalHomeOf(declAt("/proj/node_modules/typescript/lib/typescript.d.ts"))).toEqual({
+      module: "typescript",
+    });
+  });
+
+  test("in-project declarations have no external home", () => {
+    expect(externalHomeOf(declAt("/proj/src/app.ts"))).toBeNull();
   });
 });
