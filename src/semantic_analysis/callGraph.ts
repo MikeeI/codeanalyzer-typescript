@@ -43,12 +43,23 @@ export function buildCallGraph(
   root: string,
   log: Logger,
   phantoms: boolean,
+  only?: Set<string>,
 ): CallGraphResult {
-  // 1. The node universe: every callable signature in the symbol table. Edges may only target these.
+  // 1. The node universe: every callable signature in the WHOLE symbol table. Edges may only target
+  //    these, and gating uses the full (merged) table so a cross-program in-project call resolves.
   const allSignatures = new Set<string>();
+  for (const mod of Object.values(symbol_table)) {
+    const sigs: TSCallable[] = [];
+    collectModule(mod, sigs);
+    for (const c of sigs) allSignatures.add(c.signature);
+  }
+  // Callables to ITERATE: only this program's modules (all modules when `only` is undefined), so a
+  // multi-program build attributes each call site to the program whose options actually resolve it.
   const callables: TSCallable[] = [];
-  for (const mod of Object.values(symbol_table)) collectModule(mod, callables);
-  for (const c of callables) allSignatures.add(c.signature);
+  for (const [key, mod] of Object.entries(symbol_table)) {
+    if (only && !only.has(key)) continue;
+    collectModule(mod, callables);
+  }
 
   // 2. Index call/new expression AST nodes by full span so we can match recorded call sites.
   const callExprIndex = indexCallExpressions(project);
