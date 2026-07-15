@@ -21,7 +21,7 @@
 import type { Logger } from "../../utils";
 import type { EdgeRow, GraphRows, NodeRow, Prop } from "./rows";
 import { chunk } from "./rows";
-import { CONSTRAINTS, INDEXES } from "./schema";
+import { CONSTRAINTS, INDEXES, SCHEMA_VERSION } from "./schema";
 
 export interface BoltConfig {
   uri: string;
@@ -32,6 +32,12 @@ export interface BoltConfig {
 
 const DESCENDANTS = "[:TS_DECLARES|TS_HAS_METHOD|TS_HAS_FIELD|TS_HAS_BODY_NODE*1..]";
 const BATCH = 1000;
+
+/** #68: a DB written by a different schema version must be fully re-upserted, not hash-diffed —
+ * otherwise unchanged modules keep the old label vocabulary while :Application advertises the new. */
+export function shouldForceFullUpsert(dbVersion: string | null, producerVersion: string): boolean {
+  return dbVersion !== producerVersion;
+}
 
 export async function boltWriter(
   rows: GraphRows,
@@ -65,7 +71,20 @@ export async function boltWriter(
       }
     }
 
-    // 2. diff content_hash.
+    // 2. read schema version and decide if we need to force a full upsert.
+    let dbSchemaVersion: string | null = null;
+    await withSession(session, async (s) => {
+      const res = await s.run("MATCH (a:Application) RETURN a.schema_version AS v LIMIT 1");
+      dbSchemaVersion = res.records[0]?.get("v") ?? null;
+    });
+    const forceAll = shouldForceFullUpsert(dbSchemaVersion, SCHEMA_VERSION);
+    if (forceAll) {
+      log.info(
+        `neo4j(bolt): schema ${dbSchemaVersion ?? "(none)"} → ${SCHEMA_VERSION}, full upsert forced`,
+      );
+    }
+
+    // 3. diff content_hash.
     const dbHash = new Map<string, string | null>();
     await withSession(session, async (s) => {
       const res = await s.run("MATCH (m:TSModule) RETURN m._module AS k, m.content_hash AS h");
@@ -74,17 +93,17 @@ export async function boltWriter(
     const changed = new Set<string>();
     for (const [m, nodes] of byModule) {
       const rowHash = hashOf(nodes, m);
-      if (!dbHash.has(m) || rowHash === undefined || rowHash !== dbHash.get(m)) changed.add(m);
+      if (forceAll || !dbHash.has(m) || rowHash === undefined || rowHash !== dbHash.get(m)) changed.add(m);
     }
     log.info(
       `neo4j(bolt): ${byModule.size} modules (${changed.size} changed), ${shared.length} shared nodes, ` +
         `${rows.edges.length} edges`,
     );
 
-    // 3. shared nodes are always upserted (MERGE-only).
+    // 4. shared nodes are always upserted (MERGE-only).
     await upsertNodes(session, neo4j, shared);
 
-    // 4. per changed module: purge owned edges + vanished decls, then upsert its nodes.
+    // 5. per changed module: purge owned edges + vanished decls, then upsert its nodes.
     for (const m of changed) {
       const nodes = byModule.get(m)!;
       const keys = nodes.map((n) => n.value);
@@ -100,14 +119,14 @@ export async function boltWriter(
       await upsertNodes(session, neo4j, nodes);
     }
 
-    // 5. upsert edges owned by a changed module (owner = source node's module) or shared.
+    // 6. upsert edges owned by a changed module (owner = source node's module) or shared.
     const edges = rows.edges.filter((e) => {
       const owner = moduleOf.get(e.from.value);
       return owner === undefined || changed.has(owner);
     });
     await upsertEdges(session, neo4j, edges);
 
-    // 6. orphan prune — only safe on a full run (a targeted run can't tell deleted from untargeted).
+    // 7. orphan prune — only safe on a full run (a targeted run can't tell deleted from untargeted).
     if (fullRun) {
       const present = [...byModule.keys()];
       await withSession(session, async (s) => {
