@@ -203,7 +203,7 @@ interface Edge {
 }
 const edges = (x: unknown): Edge[] => (Array.isArray(x) ? (x as Edge[]) : []);
 
-/** Strip the `@local` suffix from a fully-qualified cross-edge endpoint — it IS the graph node id. */
+/** A cross-edge endpoint is already the graph node's can:// id — pass it through unchanged. */
 const idOf = (endpoint: string): string => endpoint;
 
 function moduleKeyOf(mod: V2Module): string {

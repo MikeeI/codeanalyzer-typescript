@@ -2,7 +2,7 @@
  * The canonical CLDK analysis schema for TypeScript.
  *
  * Mirrors the identity-only Python schema (codeanalyzer-python/.../py_schema.py) field for
- * field on the invariant spine — `TSApplication { symbol_table, call_graph, entrypoints }`,
+ * field on the invariant spine — `TSApplication { symbol_table, call_graph, external_symbols }`,
  * `Module → Class/Callable` nesting, identity-only `TSCallEdge` whose `source`/`target` are
  * bare signature strings — and extends it at the leaves with TypeScript-native node kinds
  * (interface / type-alias / enum / namespace) and typed fields (generics, modifiers, ...).
@@ -61,17 +61,6 @@ export interface TSComment {
   end_line: number;
   start_column: number;
   end_column: number;
-}
-
-export interface TSSymbol {
-  name: string;
-  scope: string; // local | parameter | class | module | global
-  kind: string; // variable | parameter | property | function | class | interface | enum | type_alias | module
-  type: string | null;
-  qualified_name: string | null;
-  is_builtin: boolean;
-  lineno: number;
-  col_offset: number;
 }
 
 export interface TSVariableDeclaration {

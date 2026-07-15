@@ -17,7 +17,7 @@ const CAN_NODE = "CanNode";
 /** How an edge addresses one of its endpoints: the label + key property to MATCH on, and value. */
 export interface NodeRef {
   label: string; // the label carrying the uniqueness constraint ("Application" | "CanNode")
-  keyProp: string; // "signature" | "file_key" | "name" | "qualified_name" | "id"
+  keyProp: string; // always "id" at schema v2 — every node is keyed on its can:// id
   value: string;
 }
 
