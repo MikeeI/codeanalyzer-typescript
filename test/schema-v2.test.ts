@@ -786,4 +786,30 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     expect(resolvesTo).toBe(resolvesToCount(monoApp4));
     expect(typedOverlay + containment + resolvesTo + heritage).toBe(monoRows.edges.length);
   });
+
+  test("DDG/CFG_NEXT parity survives the writers: every row keyed, keys fully discriminate (issue #70)", () => {
+    // The per-family counts above compare rows to JSON *before* the writers run. Both writers MERGE
+    // discriminated families on `(endpoints, _k)` — so the live graph materializes exactly one
+    // relationship per distinct (from, to, key) tuple. If any row lacked a key, or two parallel
+    // rows shared one, MERGE would silently collapse them and row-level parity would never notice.
+    // This pins the discriminant on the real L4 projection, not a synthetic fixture.
+    for (const type of ["DDG", "CFG_NEXT"] as const) {
+      const rows = monoRows.edges.filter((e) => e.type === type);
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((e) => e.key !== undefined)).toBe(true);
+      const distinct = new Set(rows.map((e) => `${e.from.value} ${e.to.value} ${e.key}`));
+      expect(distinct.size).toBe(rows.length);
+    }
+    // Non-vacuous: the fixture really produces parallel edges between one endpoint pair for both
+    // families (per-var DDG; a conditional's true/false CFG_NEXT pair) — the collapse the `_k`
+    // discriminant exists to prevent. Guards against the fixture ever losing that shape.
+    for (const type of ["DDG", "CFG_NEXT"] as const) {
+      const pairs = new Map<string, number>();
+      for (const e of monoRows.edges.filter((e) => e.type === type)) {
+        const pair = `${e.from.value} ${e.to.value}`;
+        pairs.set(pair, (pairs.get(pair) ?? 0) + 1);
+      }
+      expect(Math.max(...pairs.values())).toBeGreaterThanOrEqual(2);
+    }
+  });
 });
