@@ -39,6 +39,22 @@ export function makesDriver(): unknown {
   return neo4j.driver("bolt://localhost");
 }
 
+/**
+ * Member calls on a LOCAL receiver of external type — the fallback has no binding for `d`, so only
+ * the checker can attribute these. Each line pins a different declaration kind in the framework's
+ * .d.ts, the Express/RxJS pattern from #53 (`res.json(...)`, `observable.subscribe(...)`):
+ *   - `d.session()`   → MethodDeclaration (in neo4j-driver-core, where the decl actually lives)
+ *   - `d.rxSession()` → function-typed PropertyDeclaration (`rxSession: (cfg?) => RxSession`)
+ *   - `neo4j.auth.basic()` → PropertySignature on a nested receiver (`neo4j.auth` is a property
+ *     access, not an import binding, so the fallback can't reach it either)
+ */
+export function makesSession(): unknown {
+  const d = neo4j.driver("bolt://localhost", neo4j.auth.basic("user", "pass"));
+  const s = d.session();
+  d.rxSession();
+  return s;
+}
+
 /** a lib.*.d.ts global with no import at all — only the checker can classify its home. */
 export function unsafeEval(raw: string): unknown {
   return eval(raw);

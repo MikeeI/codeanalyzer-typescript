@@ -160,6 +160,20 @@ export function resolveCalleeSignature(
     }
     return null;
   }
+
+  // EXTERNAL-ONLY widening (#53): framework .d.ts files declare callable members as property
+  // signatures or function-typed property declarations (`get: IRouterMatcher` in @types/express,
+  // `rxSession: (cfg?) => RxSession` in neo4j-driver) — kinds isCallableDecl deliberately excludes
+  // for the in-project path (a project property is a field, not a callable). Being the callee of
+  // this very call expression is evidence enough that the member is callable, so accept these
+  // kinds when — and only when — the declaration homes outside the project.
+  if (Node.isPropertySignature(decl) || Node.isPropertyDeclaration(decl)) {
+    const home = externalHomeOf(decl);
+    if (home) {
+      const member = safeName(decl);
+      return { signature: `${home.module}.${member}`, isConstructor: false, external: { module: home.module, member } };
+    }
+  }
   return null;
 }
 

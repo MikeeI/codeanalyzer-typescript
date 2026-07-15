@@ -79,11 +79,25 @@ describe("external call resolution (#53)", () => {
     expect(ext.some((s) => /^commander\.(name|description|parse)$/.test(s))).toBe(true);
     // default-import member call (`neo4j.driver(...)`) → external neo4j-driver.driver.
     expect(ext.some((s) => s.startsWith("neo4j-driver") && s.includes("driver"))).toBe(true);
+    // member calls on a LOCAL external-typed receiver (`d` — no import binding, checker-only):
+    // MethodDeclaration members already resolved; the module is neo4j-driver-core because that
+    // transitive package is where `Driver.session` is actually declared.
+    expect(ext).toContain("neo4j-driver-core.session");
+    // function-typed PropertyDeclaration member (`rxSession: (cfg?) => RxSession`) — the
+    // framework-.d.ts shape (Express `app.get`, RxJS `subscribe`) that #53 must resolve.
+    expect(ext).toContain("neo4j-driver.rxSession");
+    // PropertySignature member on a nested receiver (`neo4j.auth.basic` — fallback-unreachable).
+    expect(ext).toContain("neo4j-driver.basic");
     // a TS-stdlib global (eval, from lib.*.d.ts) with no import at all — checker-resolved, new in #53.
     expect(ext.some((s) => s.endsWith(".eval"))).toBe(true);
 
     const calls = callsIn(app, "src/external-calls.ts");
     expect(calls.length).toBeGreaterThan(0);
+    // The checker-only member calls got their callee backfilled in place on the call site.
+    const rx = calls.find((c) => c.method_name === "rxSession");
+    expect(rx?.callee_signature).toBe("neo4j-driver.rxSession");
+    const session = calls.find((c) => c.method_name === "session");
+    expect(session?.callee_signature).toBe("neo4j-driver-core.session");
     const resolved = calls.filter((c) => c.callee_signature != null);
     expect(resolved.length / calls.length).toBeGreaterThanOrEqual(0.75);
   });
