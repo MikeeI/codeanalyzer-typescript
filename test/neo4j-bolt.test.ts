@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Neo4jContainer, type StartedNeo4jContainer } from "@testcontainers/neo4j";
 import neo4j, { type Driver } from "neo4j-driver";
-import { type BoltConfig, boltWriter, project } from "../src/build/neo4j";
+import { type BoltConfig, boltWriter, CONSTRAINTS, INDEXES, project } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
 import { Logger } from "../src/utils";
@@ -105,9 +105,14 @@ containerSuite("neo4j bolt writer", () => {
       expect(canNode).toBeGreaterThan(0);
       expect(kinds).toBe(canNode);
 
-      // Constraints + indexes were created up front.
-      expect(await num("SHOW CONSTRAINTS YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(8);
-      expect(await num("SHOW INDEXES YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(11);
+      // Constraints + indexes were created up front. Expectations derive from the catalog (a
+      // uniqueness constraint also spawns a backing index, so SHOW INDEXES only grows from here).
+      expect(await num("SHOW CONSTRAINTS YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(
+        CONSTRAINTS.length,
+      );
+      expect(await num("SHOW INDEXES YIELD name RETURN count(*)")).toBeGreaterThanOrEqual(
+        INDEXES.length,
+      );
 
       // A known resolved call edge from the fixture (index.ts calls services.announce).
       expect(
@@ -148,6 +153,48 @@ containerSuite("neo4j bolt writer", () => {
       // nodes are MERGE-only and intentionally never pruned, so we compare only _module-tagged nodes.)
       const moduleScoped = rows.nodes.filter((n) => "_module" in n.props).length;
       expect(await num("MATCH (n) WHERE n._module IS NOT NULL RETURN count(n)")).toBe(moduleScoped);
+    },
+    120_000,
+  );
+
+  test(
+    "migrates a 1.1.0-shaped graph to 2.0.0, wiping legacy residue (#46)",
+    async () => {
+      // Seed a minimal schema-1.1.0 graph on a clean store: twin labels, the old
+      // name/file_key/signature keys, and an :Application keyed on `name` (no `id`).
+      const seed = driver.session();
+      try {
+        await seed.run("MATCH (n) DETACH DELETE n");
+        await seed.run(
+          "CREATE (:Application {name:'sample-app', schema_version:'1.1.0'}) " +
+            "CREATE (:Module:TSModule {file_key:'x.ts', _module:'x.ts', content_hash:'stale'}) " +
+            "CREATE (:Symbol:TSCallable {signature:'x', _module:'x.ts'})",
+        );
+      } finally {
+        await seed.close();
+      }
+
+      // A full 2.0.0 push against the same DB must detect the version mismatch and wipe the residue.
+      const rows = project(await analyze(optsFor()), "sample-app");
+      await boltWriter(rows, cfg, log, true);
+
+      // Exactly one :Application survives — the fresh v2 one (id set, version bumped). The 1.x app,
+      // keyed on name with no id, was wiped, so the version read is no longer nondeterministic.
+      expect(await num("MATCH (a:Application) RETURN count(a)")).toBe(1);
+      expect(
+        await num(
+          "MATCH (a:Application) WHERE a.id IS NOT NULL AND a.schema_version = '2.0.0' RETURN count(a)",
+        ),
+      ).toBe(1);
+
+      // No legacy twin-label residue remains (would-be poison for v2 label queries).
+      expect(
+        await num("MATCH (n) WHERE n._module IS NOT NULL AND NOT n:CanNode RETURN count(n)"),
+      ).toBe(0);
+
+      // The stale 'x.ts' :TSModule seed did not survive as a duplicate — exactly the fixture's modules.
+      const fixtureModules = rows.nodes.filter((n) => n.labels.includes("TSModule")).length;
+      expect(await num("MATCH (m:TSModule) RETURN count(m)")).toBe(fixtureModules);
     },
     120_000,
   );
