@@ -39,6 +39,28 @@ export function shouldForceFullUpsert(dbVersion: string | null, producerVersion:
   return dbVersion !== producerVersion;
 }
 
+/**
+ * #46/#68 migration: wipe the pre-2.0.0 (schema 1.x) residue when the version gate forces a full
+ * upsert. Pushing 2.0.0 onto a 1.1.0 DB otherwise orphans the whole 1.x subgraph AND poisons v2
+ * queries — 1.x nodes carry twin TS labels (`:Module:TSModule`, `:Symbol:TSCallable`) so they match
+ * v2 patterns, and a second `:Application` (keyed on name, no `id`) makes the version read
+ * nondeterministic. These run ONCE, before the per-module loop; they are ordered, idempotent, and
+ * no-op on a fresh DB.
+ *
+ * They are intentionally UNANCHORED (no `:CanNode` guard on the MATCH) — that is the whole point:
+ * they must match the *legacy* nodes, which never carry `:CanNode`. Every v2 project-owned node DOES
+ * carry `:CanNode`, so the `AND NOT n:CanNode` predicate spares everything current. RETURN count so
+ * the caller can log what each statement removed.
+ */
+export const LEGACY_WIPE_STATEMENTS: readonly string[] = [
+  // 1.x project-owned nodes carried `_module` under twin labels (:Module:TSModule, …) but not :CanNode.
+  "MATCH (n) WHERE n._module IS NOT NULL AND NOT n:CanNode DETACH DELETE n RETURN count(n) AS wiped",
+  // 1.x shared nodes (externals / packages / decorators) had no `_module`; keyed on name, not id.
+  "MATCH (n) WHERE (n:External OR n:Package OR n:Decorator) AND NOT n:CanNode DETACH DELETE n RETURN count(n) AS wiped",
+  // The 1.x :Application node was keyed on `name`, so it has no `id`.
+  "MATCH (a:Application) WHERE a.id IS NULL DETACH DELETE a RETURN count(a) AS wiped",
+];
+
 export async function boltWriter(
   rows: GraphRows,
   cfg: BoltConfig,
@@ -71,17 +93,42 @@ export async function boltWriter(
       }
     }
 
-    // 2. read schema version and decide if we need to force a full upsert.
+    // 2. read schema version and decide if we need to force a full upsert. Scope the read to THIS
+    // app's :Application (by id) — an unscoped `MATCH (a:Application)` could read a foreign analyzer's
+    // node in a shared database and misjudge the version. Absent id → null → forces (safe default).
+    const appId = rows.nodes.find((n) => n.labels[0] === "Application")?.value ?? null;
     let dbSchemaVersion: string | null = null;
-    await withSession(session, async (s) => {
-      const res = await s.run("MATCH (a:Application) RETURN a.schema_version AS v LIMIT 1");
-      dbSchemaVersion = res.records[0]?.get("v") ?? null;
-    });
+    if (appId !== null) {
+      await withSession(session, async (s) => {
+        const res = await s.run(
+          "MATCH (a:Application {id: $appId}) RETURN a.schema_version AS v LIMIT 1",
+          { appId },
+        );
+        dbSchemaVersion = res.records[0]?.get("v") ?? null;
+      });
+    }
     const forceAll = shouldForceFullUpsert(dbSchemaVersion, SCHEMA_VERSION);
     if (forceAll) {
       log.info(
         `neo4j(bolt): schema ${dbSchemaVersion ?? "(none)"} → ${SCHEMA_VERSION}, full upsert forced`,
       );
+      // Detect-and-wipe the pre-2.0.0 subgraph in one step, BEFORE any new write, so stale twin-label
+      // nodes can't survive to poison v2 queries or the content-hash diff. Idempotent on fresh DBs.
+      const counts: number[] = [];
+      await withSession(session, async (s) => {
+        for (const stmt of LEGACY_WIPE_STATEMENTS) {
+          const res = await s.run(stmt);
+          const c = res.records[0]?.get("wiped");
+          counts.push(typeof c?.toNumber === "function" ? c.toNumber() : Number(c ?? 0));
+        }
+      });
+      const wiped = counts.reduce((a, b) => a + b, 0);
+      if (wiped > 0) {
+        log.info(
+          `neo4j(bolt): wiped ${wiped} legacy (pre-2.0.0) nodes ` +
+            `(module=${counts[0]}, shared=${counts[1]}, app=${counts[2]})`,
+        );
+      }
     }
 
     // 3. diff content_hash.
@@ -109,9 +156,12 @@ export async function boltWriter(
       const keys = nodes.map((n) => n.value);
       await withSession(session, async (s) => {
         await s.executeWrite(async (tx: any) => {
-          await tx.run(`MATCH (x {_module: $m})-[r]->() DELETE r`, { m });
+          // Anchor on :CanNode so these seek the module's index slice instead of scanning the whole
+          // store (and never touch non-CanNode nodes). The `x.id IS NULL` guard defends the sweep
+          // against a null key — three-valued logic would otherwise drop the row from `NOT x.id IN`.
+          await tx.run(`MATCH (x:CanNode {_module: $m})-[r]->() DELETE r`, { m });
           await tx.run(
-            `MATCH (x {_module: $m}) WHERE NOT x.id IN $keys DETACH DELETE x`,
+            `MATCH (x:CanNode {_module: $m}) WHERE x.id IS NULL OR NOT x.id IN $keys DETACH DELETE x`,
             { m, keys },
           );
         });

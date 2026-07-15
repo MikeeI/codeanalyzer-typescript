@@ -194,6 +194,9 @@ export const CONSTRAINTS: readonly string[] = uniquenessConstraints();
 export const INDEXES: readonly string[] = [
   "CREATE INDEX callable_name IF NOT EXISTS FOR (c:TSCallable) ON (c.name)",
   "CREATE INDEX cannode_kind IF NOT EXISTS FOR (n:CanNode) ON (n.kind)",
+  // Backs the bolt writer's per-module edge-delete + vanished-decl sweep, which anchor on
+  // `(:CanNode {_module})` — without this they would scan the whole node store.
+  "CREATE INDEX cannode_module IF NOT EXISTS FOR (n:CanNode) ON (n._module)",
 ];
 
 export interface SchemaDocument {
