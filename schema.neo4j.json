@@ -1,9 +1,7 @@
 {
   "schema_version": "2.0.0",
   "generator": "codeanalyzer-typescript",
-  "marker_labels": [
-    "Entrypoint"
-  ],
+  "marker_labels": [],
   "node_labels": [
     {
       "label": "Application",
@@ -51,12 +49,7 @@
         "is_exported": "boolean",
         "is_ambient": "boolean",
         "start_line": "integer",
-        "end_line": "integer",
-        "framework": "string",
-        "detection_source": "string",
-        "route_path": "string",
-        "http_methods": "string[]",
-        "entrypoint_count": "integer"
+        "end_line": "integer"
       }
     },
     {
@@ -148,12 +141,7 @@
         "is_ambient": "boolean",
         "is_implicit": "boolean",
         "start_line": "integer",
-        "end_line": "integer",
-        "framework": "string",
-        "detection_source": "string",
-        "route_path": "string",
-        "http_methods": "string[]",
-        "entrypoint_count": "integer"
+        "end_line": "integer"
       }
     },
     {
@@ -419,7 +407,6 @@
     "Field": "TSField",
     "BodyNode": "TSBodyNode",
     "External": "TSExternal",
-    "AnonymousCallable": "TSAnonymousCallable",
-    "Entrypoint": "TSEntrypoint"
+    "AnonymousCallable": "TSAnonymousCallable"
   }
 }

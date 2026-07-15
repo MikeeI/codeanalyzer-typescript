@@ -19,7 +19,6 @@ describe("TS twin-label vocabulary", () => {
   test("twinOf prefixes with TS", () => {
     expect(TS_PREFIX).toBe("TS");
     expect(twinOf("Callable")).toBe("TSCallable");
-    expect(twinOf("Entrypoint")).toBe("TSEntrypoint");
   });
 
   test("withTwins appends a twin per label, keeps order, and skips shared merge labels", () => {
@@ -27,9 +26,6 @@ describe("TS twin-label vocabulary", () => {
     // both shared merge labels are skipped (v2 merges on CanNode)
     expect(withTwins(["CanNode", "Callable"])).toEqual(["CanNode", "Callable", "TSCallable"]);
     expect(withTwins(["Symbol", "Class"])).toEqual(["Symbol", "Class", "TSClass"]);
-    expect(withTwins(["CanNode", "Callable", "Entrypoint"])).toEqual([
-      "CanNode", "Callable", "Entrypoint", "TSCallable", "TSEntrypoint",
-    ]);
     // idempotent: an already-expanded set gains nothing
     expect(withTwins(["Module", "TSModule"])).toEqual(["Module", "TSModule"]);
   });
@@ -45,8 +41,8 @@ describe("TS twin-label vocabulary", () => {
     // shared merge labels are never specific/marker labels, so they map to nothing
     expect(doc.label_twins["CanNode"]).toBeUndefined();
     expect(doc.label_twins["Symbol"]).toBeUndefined();
-    // 12 node labels + 1 marker (Entrypoint) = 13 twins
-    expect(Object.keys(doc.label_twins).length).toBe(13);
+    // 12 node labels + 0 markers (none currently) = 12 twins
+    expect(Object.keys(doc.label_twins).length).toBe(12);
     expect(Object.keys(doc.label_twins).length).toBe(NODE_LABELS.length + MARKER_LABELS.length);
   });
 });

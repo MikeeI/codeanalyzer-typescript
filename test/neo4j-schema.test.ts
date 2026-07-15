@@ -98,6 +98,15 @@ describe("neo4j schema conformance", () => {
     expect(onDisk).toBe(fresh);
   });
 
+  test("2.0.0 does not advertise never-populated surfaces (issues #55/#60)", () => {
+    const doc = buildSchemaDocument();
+    expect(doc.marker_labels.length).toBe(0);
+    const allProps = doc.node_labels.flatMap((n) => Object.keys(n.properties));
+    for (const dead of ["framework", "detection_source", "route_path", "http_methods", "entrypoint_count", "accessed_symbols_json"]) {
+      expect(allProps, `dead property still advertised: ${dead}`).not.toContain(dead);
+    }
+  });
+
   test("every node carries exactly the TS twins of its base labels (transient dual-labeling)", () => {
     for (const node of rows.nodes) {
       const base = node.labels.filter((l) => !twins.has(l));

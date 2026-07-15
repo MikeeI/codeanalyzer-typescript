@@ -36,7 +36,7 @@ export interface RelType {
 }
 
 /** Labels layered onto a node in addition to its primary/specific label. */
-export const MARKER_LABELS = ["Entrypoint"] as const;
+export const MARKER_LABELS = [] as const;
 
 /**
  * Language-namespace twins (transient dual-labeling, issue #65): every specific and marker label is
@@ -70,13 +70,6 @@ export function withTwins(labels: string[]): string[] {
 /** The shared MERGE label for every can://-id-keyed node (one constraint; uniform edge endpoints). */
 const CAN = "CanNode";
 const SPAN = { start_line: "integer", end_line: "integer" } as const;
-const ENTRYPOINT = {
-  framework: "string",
-  detection_source: "string",
-  route_path: "string",
-  http_methods: "string[]",
-  entrypoint_count: "integer",
-} as const;
 /** Every can://-keyed node carries these. */
 const COMMON = { id: "string", kind: "string", _module: "string" } as const;
 
@@ -105,7 +98,7 @@ export const NODE_LABELS: NodeLabel[] = [
     key: "id",
     properties: {
       ...COMMON, signature: "string", name: "string", base_classes: "string[]", implements_types: "string[]",
-      is_abstract: "boolean", is_exported: "boolean", is_ambient: "boolean", ...SPAN, ...ENTRYPOINT,
+      is_abstract: "boolean", is_exported: "boolean", is_ambient: "boolean", ...SPAN,
     },
   },
   {
@@ -140,7 +133,7 @@ export const NODE_LABELS: NodeLabel[] = [
       ...COMMON, signature: "string", name: "string", return_type: "string", cyclomatic_complexity: "integer",
       accessibility: "string", accessor_kind: "string", is_static: "boolean", is_abstract: "boolean",
       is_async: "boolean", is_generator: "boolean", is_exported: "boolean", is_ambient: "boolean", is_implicit: "boolean",
-      ...SPAN, ...ENTRYPOINT,
+      ...SPAN,
     },
   },
   { label: "Field", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", type: "string", ...SPAN } },

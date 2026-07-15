@@ -174,13 +174,11 @@ export interface TSCallable {
   start_line: number;
   end_line: number;
   code_start_line: number;
-  accessed_symbols: TSSymbol[];
   call_sites: TSCallsite[];
   inner_callables: Record<string, TSCallable>;
   inner_classes: Record<string, TSClass>;
   local_variables: TSVariableDeclaration[];
   cyclomatic_complexity: number;
-  entrypoints: TSEntrypoint[]; // non-empty ⇒ this callable is an entrypoint (level-2 finders populate)
   // --- TypeScript-native typed fields ---
   kind: TSCallableKind;
   accessibility: string | null; // public | private | protected | null
@@ -234,7 +232,6 @@ export interface TSClass {
   methods: Record<string, TSCallable>;
   attributes: Record<string, TSClassAttribute>;
   inner_classes: Record<string, TSClass>;
-  entrypoints: TSEntrypoint[]; // class-level entrypoint (e.g. a framework @Controller); empty otherwise
   is_abstract: boolean;
   is_exported: boolean;
   is_ambient: boolean;
@@ -370,19 +367,6 @@ export interface TSCallEdge {
   type: typeof CALL_DEP;
   weight: number;
   provenance: string[]; // e.g. ["tsc"]
-  tags: Record<string, string>;
-}
-
-// ----------------------------------------------------------------------------------------------
-// Entrypoint (optional; level-2 / framework finders populate it — empty for level 1).
-// Embedded on the owning TSCallable/TSClass, so it carries no signature/source_file of its own.
-// ----------------------------------------------------------------------------------------------
-
-export interface TSEntrypoint {
-  framework: string;
-  detection_source: string; // decorator | base_class | convention | extension | ...
-  route_path: string | null;
-  http_methods: string[];
   tags: Record<string, string>;
 }
 
