@@ -26,7 +26,7 @@ import {
   constructorSignatureOf,
   fileKeyOf,
 } from "../schema";
-import { computeSignatureForDecl } from "../schema";
+import { computeSignatureForDecl, contributorName, thisAssignedFunctionName } from "../schema";
 
 // ----------------------------------------------------------------------------------------------
 // dynamic-getter helpers
@@ -313,6 +313,31 @@ function namedBoundary(node: Node): Boundary {
     const init = node.getInitializer();
     if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return "callable";
   }
+  // `this.<name> = fn` inside a constructor function (issue #85).
+  if (Node.isBinaryExpression(node) && thisAssignedFunctionName(node) !== null) return "callable";
+  // Object-literal members: shorthand `{ foo(){} }` is a MethodDeclaration — one reachable from a
+  // function body can only be an object-literal member, since a class body is taken as "class"
+  // above and descent stops there.
+  if (Node.isMethodDeclaration(node)) return "callable";
+  if (Node.isPropertyAssignment(node)) {
+    const init = node.getInitializer();
+    if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return "callable";
+  }
+  return null;
+}
+
+/** The function node a "callable" boundary actually wraps, plus how to label it. */
+function callableOf(node: Node): { fnNode: Node; kind: TSCallableKind } | null {
+  if (Node.isFunctionDeclaration(node)) return { fnNode: node, kind: "function" };
+  if (Node.isMethodDeclaration(node)) return { fnNode: node, kind: "method" };
+  const init = Node.isVariableDeclaration(node) || Node.isPropertyAssignment(node)
+    ? node.getInitializer()
+    : Node.isBinaryExpression(node)
+      ? node.getRight()
+      : undefined;
+  if (!init) return null;
+  if (Node.isArrowFunction(init)) return { fnNode: init, kind: "arrow" };
+  if (Node.isFunctionExpression(init)) return { fnNode: init, kind: "function_expression" };
   return null;
 }
 
@@ -411,16 +436,10 @@ export function buildCallable(
       onCall: (n) => call_sites.push(buildCallsite(n)),
       onLocal: (vd) => local_variables.push(buildVariable(vd, "function")),
       onNestedCallable: (n) => {
-        if (Node.isVariableDeclaration(n)) {
-          const init = n.getInitializer();
-          if (!init) return;
-          const k: TSCallableKind = Node.isArrowFunction(init) ? "arrow" : "function_expression";
-          const r = buildCallable(n, init, k, root);
-          if (r) inner_callables[r.sig] = r.callable;
-        } else {
-          const r = buildCallable(n, n, "function", root);
-          if (r) inner_callables[r.sig] = r.callable;
-        }
+        const c = callableOf(n);
+        if (!c) return;
+        const r = buildCallable(n, c.fnNode, c.kind, root);
+        if (r) inner_callables[r.sig] = r.callable;
       },
       onNestedClass: (n) => {
         const r = buildClass(n, root);
@@ -430,8 +449,11 @@ export function buildCallable(
   }
 
   const nameNode = sigNode as unknown as { getName?: () => string | undefined };
-  const name =
-    Node.isConstructorDeclaration(fnNode) ? "constructor" : (nameNode.getName?.() ?? "(anonymous)");
+  // An assignment-declared callable (`this.x = fn`) has no getName(), but the signature layer
+  // already knows what names it — fall back to that before giving up (issue #85).
+  const name = Node.isConstructorDeclaration(fnNode)
+    ? "constructor"
+    : (nameNode.getName?.() ?? contributorName(sigNode) ?? "(anonymous)");
 
   const callable: TSCallable = {
     name,
@@ -804,6 +826,16 @@ function buildStatemented(container: Node, root: string, varScope: TSVariableDec
         const r = buildCallable(vd, init, k, root);
         if (r) functions[r.sig] = r.callable;
       } else {
+        // A module-level object literal is still a variable, but its function-valued members are
+        // callables (issue #85) — `const api = { foo(){} }` is how much pre-class JS declares them.
+        if (init && Node.isObjectLiteralExpression(init)) {
+          for (const prop of init.getProperties()) {
+            const c = callableOf(prop);
+            if (!c) continue;
+            const r = buildCallable(prop, c.fnNode, c.kind, root);
+            if (r) functions[r.sig] = r.callable;
+          }
+        }
         variables.push(buildVariable(vd, varScope));
       }
     }
