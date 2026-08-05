@@ -77,24 +77,14 @@ function diffSummary(tsc: CallGraphResult, jelly: CallGraphResult): string {
   );
 }
 
-const JS_EXTS = [".js", ".jsx", ".mjs", ".cjs"];
-
-/**
- * `execFileSync` puts the entire command — including every entry file — in `Error.message`, which
- * on a real project is hundreds of paths. Keep the first line and cap it, so the reason stays
- * readable in an error the user is meant to act on.
- */
-function briefly(reason: string, limit = 160): string {
-  const firstLine = reason.split("\n", 1)[0] ?? reason;
-  return firstLine.length > limit ? `${firstLine.slice(0, limit)}…` : firstLine;
-}
+/** execFileSync puts the whole command — every entry file — in Error.message. Keep it readable. */
+const briefly = (reason: string): string => reason.split("\n", 1)[0]!.slice(0, 160);
 
 /** Whether most analyzed modules are JavaScript, i.e. whether the tsc leg has types to work with. */
 function isJavaScriptMajority(symbol_table: Record<string, TSModule>): boolean {
   const files = Object.keys(symbol_table);
-  if (files.length === 0) return false;
-  const js = files.filter((f) => JS_EXTS.some((ext) => f.endsWith(ext))).length;
-  return js * 2 > files.length;
+  const js = files.filter((f) => /\.(js|jsx|mjs|cjs)$/.test(f)).length;
+  return files.length > 0 && js * 2 > files.length;
 }
 
 /**
@@ -111,10 +101,8 @@ export const unionProvider: CallGraphProvider = {
       jelly = jellyProvider.build(ctx);
     } catch (e) {
       const reason = briefly((e as Error).message);
-      // On TypeScript the tsc resolver carries the graph and losing jelly is a modest degradation.
-      // On JavaScript it is a cliff — the resolver has no declared types to work with, so jelly
-      // supplies most edges (156 of 161 union edges on OWASP NodeGoat, deps installed). Say so at error level:
-      // at default verbosity `info` is not printed at all, which made this failure silent.
+      // Losing jelly is modest on TS, a cliff on JS (156 of 161 union edges on NodeGoat), and
+      // `info` is not printed at default verbosity — which made the JS case silent.
       if (isJavaScriptMajority(ctx.symbol_table)) {
         ctx.log.error(
           `call graph (union): jelly failed (${reason}) on a JavaScript-majority project — ` +

@@ -28,8 +28,7 @@ export function contributorName(node: Node): string | null {
   }
   // `this.<name> = fn` inside a constructor function — the assignment is what names the callable.
   if (Node.isBinaryExpression(node)) return thisAssignedFunctionName(node);
-  // `{ <name>: function(){} }` — the property is what names it. Shorthand `{ <name>(){} }` is a
-  // MethodDeclaration and is already handled above.
+  // `{ <name>: function(){} }`. Shorthand `{ <name>(){} }` is a MethodDeclaration, handled above.
   if (Node.isPropertyAssignment(node)) {
     const init = node.getInitializer();
     if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return node.getName();
@@ -39,12 +38,9 @@ export function contributorName(node: Node): string | null {
 }
 
 /**
- * The name in `this.<name> = <function|arrow>`, or null if the node is any other assignment.
- *
- * Deliberately syntactic: `this` is lexical in an arrow and dynamic in a plain function, so a
- * function that is never used as a constructor will still have its `this.x = fn` members homed on
- * it. That over-approximates rather than dropping the callable, which is the right trade for a
- * symbol table — but it is an over-approximation, not a resolution.
+ * The name in `this.<name> = <function|arrow>`, else null. Syntactic on purpose: `this` is lexical
+ * in an arrow and dynamic in a plain function, so a non-constructor still gets its members homed on
+ * it. Over-approximates rather than dropping the callable — deliberate, not a resolution.
  */
 export function thisAssignedFunctionName(node: Node): string | null {
   if (!Node.isBinaryExpression(node)) return null;
