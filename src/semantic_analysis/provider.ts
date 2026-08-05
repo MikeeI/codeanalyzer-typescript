@@ -77,6 +77,26 @@ function diffSummary(tsc: CallGraphResult, jelly: CallGraphResult): string {
   );
 }
 
+const JS_EXTS = [".js", ".jsx", ".mjs", ".cjs"];
+
+/**
+ * `execFileSync` puts the entire command — including every entry file — in `Error.message`, which
+ * on a real project is hundreds of paths. Keep the first line and cap it, so the reason stays
+ * readable in an error the user is meant to act on.
+ */
+function briefly(reason: string, limit = 160): string {
+  const firstLine = reason.split("\n", 1)[0] ?? reason;
+  return firstLine.length > limit ? `${firstLine.slice(0, limit)}…` : firstLine;
+}
+
+/** Whether most analyzed modules are JavaScript, i.e. whether the tsc leg has types to work with. */
+function isJavaScriptMajority(symbol_table: Record<string, TSModule>): boolean {
+  const files = Object.keys(symbol_table);
+  if (files.length === 0) return false;
+  const js = files.filter((f) => JS_EXTS.some((ext) => f.endsWith(ext))).length;
+  return js * 2 > files.length;
+}
+
 /**
  * Run tsc + jelly and emit their union. This is the default: jelly's edges and external symbols are
  * PERSISTED (tagged `provenance: ["jelly"]`) instead of being discarded after a diff. If jelly
@@ -90,7 +110,19 @@ export const unionProvider: CallGraphProvider = {
     try {
       jelly = jellyProvider.build(ctx);
     } catch (e) {
-      ctx.log.info(`call graph (union): jelly failed (${(e as Error).message}); emitting tsc only`);
+      const reason = briefly((e as Error).message);
+      // On TypeScript the tsc resolver carries the graph and losing jelly is a modest degradation.
+      // On JavaScript it is a cliff — the resolver has no declared types to work with, so jelly
+      // supplies most edges (156 of 161 union edges on OWASP NodeGoat, deps installed). Say so at error level:
+      // at default verbosity `info` is not printed at all, which made this failure silent.
+      if (isJavaScriptMajority(ctx.symbol_table)) {
+        ctx.log.error(
+          `call graph (union): jelly failed (${reason}) on a JavaScript-majority project — ` +
+            `emitting tsc only, which typically loses most of the call graph`,
+        );
+      } else {
+        ctx.log.info(`call graph (union): jelly failed (${reason}); emitting tsc only`);
+      }
       return tsc;
     }
     ctx.log.info(`call graph diff: ${diffSummary(tsc, jelly)}`);
