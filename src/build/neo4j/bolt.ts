@@ -21,7 +21,7 @@
 import type { Logger } from "../../utils";
 import type { EdgeRow, GraphRows, NodeRow, Prop } from "./rows";
 import { chunk } from "./rows";
-import { CONSTRAINTS, INDEXES } from "./schema";
+import { CONSTRAINTS, INDEXES, nsAlt } from "./schema";
 
 export interface BoltConfig {
   uri: string;
@@ -30,7 +30,7 @@ export interface BoltConfig {
   database: string | null;
 }
 
-const DESCENDANTS = "[:DECLARES|HAS_METHOD|HAS_ATTRIBUTE|DECLARES_VAR|HAS_CALLSITE*1..]";
+const DESCENDANTS = `[:${nsAlt("DECLARES", "HAS_METHOD", "HAS_ATTRIBUTE", "DECLARES_VAR", "HAS_CALLSITE")}*1..]`;
 const BATCH = 1000;
 
 export async function boltWriter(

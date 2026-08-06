@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { relPosix } from "../utils";
 
-const SOURCE_EXTS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+const SOURCE_EXTS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -23,7 +23,7 @@ const TEST_DIRS = new Set(["__tests__", "__test__", "test", "tests", "spec", "__
 /** Test-ness is judged on the path RELATIVE TO the project root, never the absolute path. */
 function isTestFile(relKey: string): boolean {
   const base = path.basename(relKey);
-  if (/\.(test|spec)\.(ts|tsx|mts|cts)$/.test(base)) return true;
+  if (/\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(base)) return true;
   return relKey.split("/").some((p) => TEST_DIRS.has(p));
 }
 
@@ -32,7 +32,12 @@ export interface DiscoveredFile {
   fileKey: string; // project-relative POSIX path with extension
 }
 
-/** Recursively discover .ts/.tsx sources under root, skipping vendored and (optionally) test trees. */
+/**
+ * Recursively discover TypeScript and JavaScript sources under root, skipping vendored and
+ * (optionally) test trees. JavaScript is included because the checker already parses it —
+ * `defaultCompilerOptions()` sets `allowJs` — so the extension set was the only thing keeping
+ * plain-JS projects from being analyzed at all (issue #84).
+ */
 export function discoverSourceFiles(root: string, skipTests: boolean): DiscoveredFile[] {
   const out: DiscoveredFile[] = [];
   const walk = (dir: string): void => {

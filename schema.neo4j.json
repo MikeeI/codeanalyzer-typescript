@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1.0",
+  "schema_version": "2.0.0",
   "generator": "codeanalyzer-typescript",
   "marker_labels": [
     "Entrypoint"
@@ -267,7 +267,7 @@
   ],
   "relationship_types": [
     {
-      "type": "HAS_MODULE",
+      "type": "TS_HAS_MODULE",
       "from": [
         "Application"
       ],
@@ -277,7 +277,17 @@
       "properties": {}
     },
     {
-      "type": "DECLARES",
+      "type": "JS_HAS_MODULE",
+      "from": [
+        "Application"
+      ],
+      "to": [
+        "Module"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_DECLARES",
       "from": [
         "Module",
         "Namespace",
@@ -295,7 +305,25 @@
       "properties": {}
     },
     {
-      "type": "HAS_METHOD",
+      "type": "JS_DECLARES",
+      "from": [
+        "Module",
+        "Namespace",
+        "Class",
+        "Callable"
+      ],
+      "to": [
+        "Class",
+        "Interface",
+        "Enum",
+        "TypeAlias",
+        "Namespace",
+        "Callable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_HAS_METHOD",
       "from": [
         "Class",
         "Interface"
@@ -306,7 +334,18 @@
       "properties": {}
     },
     {
-      "type": "HAS_ATTRIBUTE",
+      "type": "JS_HAS_METHOD",
+      "from": [
+        "Class",
+        "Interface"
+      ],
+      "to": [
+        "Callable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_HAS_ATTRIBUTE",
       "from": [
         "Class",
         "Interface"
@@ -317,7 +356,18 @@
       "properties": {}
     },
     {
-      "type": "DECLARES_VAR",
+      "type": "JS_HAS_ATTRIBUTE",
+      "from": [
+        "Class",
+        "Interface"
+      ],
+      "to": [
+        "Attribute"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_DECLARES_VAR",
       "from": [
         "Module",
         "Namespace",
@@ -329,7 +379,19 @@
       "properties": {}
     },
     {
-      "type": "HAS_CALLSITE",
+      "type": "JS_DECLARES_VAR",
+      "from": [
+        "Module",
+        "Namespace",
+        "Callable"
+      ],
+      "to": [
+        "Variable"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_HAS_CALLSITE",
       "from": [
         "Callable"
       ],
@@ -339,7 +401,17 @@
       "properties": {}
     },
     {
-      "type": "RESOLVES_TO",
+      "type": "JS_HAS_CALLSITE",
+      "from": [
+        "Callable"
+      ],
+      "to": [
+        "CallSite"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_RESOLVES_TO",
       "from": [
         "CallSite"
       ],
@@ -350,7 +422,18 @@
       "properties": {}
     },
     {
-      "type": "CALLS",
+      "type": "JS_RESOLVES_TO",
+      "from": [
+        "CallSite"
+      ],
+      "to": [
+        "Callable",
+        "External"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_CALLS",
       "from": [
         "Callable"
       ],
@@ -367,7 +450,24 @@
       }
     },
     {
-      "type": "EXTENDS",
+      "type": "JS_CALLS",
+      "from": [
+        "Callable"
+      ],
+      "to": [
+        "Callable",
+        "External"
+      ],
+      "properties": {
+        "weight": "integer",
+        "provenance": "string[]",
+        "dispatch": "string",
+        "external": "boolean",
+        "module": "string"
+      }
+    },
+    {
+      "type": "TS_EXTENDS",
       "from": [
         "Class",
         "Interface"
@@ -379,7 +479,19 @@
       "properties": {}
     },
     {
-      "type": "IMPLEMENTS",
+      "type": "JS_EXTENDS",
+      "from": [
+        "Class",
+        "Interface"
+      ],
+      "to": [
+        "Class",
+        "Interface"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_IMPLEMENTS",
       "from": [
         "Class"
       ],
@@ -389,7 +501,17 @@
       "properties": {}
     },
     {
-      "type": "IMPORTS",
+      "type": "JS_IMPLEMENTS",
+      "from": [
+        "Class"
+      ],
+      "to": [
+        "Interface"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_IMPORTS",
       "from": [
         "Module"
       ],
@@ -404,7 +526,22 @@
       }
     },
     {
-      "type": "RE_EXPORTS",
+      "type": "JS_IMPORTS",
+      "from": [
+        "Module"
+      ],
+      "to": [
+        "Module",
+        "Package"
+      ],
+      "properties": {
+        "imported_names": "string[]",
+        "import_kinds": "string[]",
+        "is_type_only": "boolean"
+      }
+    },
+    {
+      "type": "TS_RE_EXPORTS",
       "from": [
         "Module"
       ],
@@ -415,7 +552,18 @@
       "properties": {}
     },
     {
-      "type": "MEMBER_OF",
+      "type": "JS_RE_EXPORTS",
+      "from": [
+        "Module"
+      ],
+      "to": [
+        "Module",
+        "Package"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_MEMBER_OF",
       "from": [
         "External"
       ],
@@ -425,7 +573,34 @@
       "properties": {}
     },
     {
-      "type": "DECORATED_BY",
+      "type": "JS_MEMBER_OF",
+      "from": [
+        "External"
+      ],
+      "to": [
+        "Package"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "TS_DECORATED_BY",
+      "from": [
+        "Class",
+        "Callable",
+        "Attribute"
+      ],
+      "to": [
+        "Decorator"
+      ],
+      "properties": {
+        "positional_arguments": "string[]",
+        "keyword_arguments_json": "string",
+        "start_line": "integer",
+        "end_line": "integer"
+      }
+    },
+    {
+      "type": "JS_DECORATED_BY",
       "from": [
         "Class",
         "Callable",
@@ -458,21 +633,69 @@
     "CREATE FULLTEXT INDEX code_fts IF NOT EXISTS FOR (c:Callable) ON EACH [c.code, c.docstring]"
   ],
   "label_twins": {
-    "Application": "TSApplication",
-    "Module": "TSModule",
-    "Class": "TSClass",
-    "Interface": "TSInterface",
-    "Enum": "TSEnum",
-    "TypeAlias": "TSTypeAlias",
-    "Namespace": "TSNamespace",
-    "Callable": "TSCallable",
-    "External": "TSExternal",
-    "AnonymousCallable": "TSAnonymousCallable",
-    "Package": "TSPackage",
-    "Decorator": "TSDecorator",
-    "CallSite": "TSCallSite",
-    "Attribute": "TSAttribute",
-    "Variable": "TSVariable",
-    "Entrypoint": "TSEntrypoint"
+    "Application": [
+      "TSApplication",
+      "JSApplication"
+    ],
+    "Module": [
+      "TSModule",
+      "JSModule"
+    ],
+    "Class": [
+      "TSClass",
+      "JSClass"
+    ],
+    "Interface": [
+      "TSInterface",
+      "JSInterface"
+    ],
+    "Enum": [
+      "TSEnum",
+      "JSEnum"
+    ],
+    "TypeAlias": [
+      "TSTypeAlias",
+      "JSTypeAlias"
+    ],
+    "Namespace": [
+      "TSNamespace",
+      "JSNamespace"
+    ],
+    "Callable": [
+      "TSCallable",
+      "JSCallable"
+    ],
+    "External": [
+      "TSExternal",
+      "JSExternal"
+    ],
+    "AnonymousCallable": [
+      "TSAnonymousCallable",
+      "JSAnonymousCallable"
+    ],
+    "Package": [
+      "TSPackage",
+      "JSPackage"
+    ],
+    "Decorator": [
+      "TSDecorator",
+      "JSDecorator"
+    ],
+    "CallSite": [
+      "TSCallSite",
+      "JSCallSite"
+    ],
+    "Attribute": [
+      "TSAttribute",
+      "JSAttribute"
+    ],
+    "Variable": [
+      "TSVariable",
+      "JSVariable"
+    ],
+    "Entrypoint": [
+      "TSEntrypoint",
+      "JSEntrypoint"
+    ]
   }
 }

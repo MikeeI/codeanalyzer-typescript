@@ -28,12 +28,12 @@ describe("synthesized anonymous-callable nodes", () => {
   });
 
   test("the CALLS edge to the anonymous callable survives (was silently dropped before)", () => {
-    const e = rows.edges.find((e) => e.type === "CALLS" && e.to.value === ANON);
+    const e = rows.edges.find((e) => e.type === "TS_CALLS" && e.to.value === ANON);
     expect(e?.from.value).toBe("src/x.foo");
   });
 
   test("a DECLARES edge links the host symbol to it (keeps it in the wiped subgraph)", () => {
-    const e = rows.edges.find((e) => e.type === "DECLARES" && e.to.value === ANON);
+    const e = rows.edges.find((e) => e.type === "TS_DECLARES" && e.to.value === ANON);
     expect(e?.from.value).toBe("src/x.foo");
     expect(e?.from.label).toBe("Symbol");
   });

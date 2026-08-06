@@ -4,7 +4,7 @@
  * and the callee-side id (computed during call-graph resolution) are byte-identical. Edges can
  * therefore only ever reference signatures that exist in the symbol table.
  */
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 import { fileKeyOf, signatureOf, constructorSignatureOf } from "./schema";
 
 /** The name a node contributes to a signature's dotted member chain, or null if it contributes none. */
@@ -21,9 +21,36 @@ export function contributorName(node: Node): string | null {
   if (Node.isVariableDeclaration(node)) {
     const init = node.getInitializer();
     if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return node.getName();
+    // An object literal contributes its variable name so its methods are homed under it
+    // (`const api = { foo(){} }` → `<module>.api.foo`).
+    if (init && Node.isObjectLiteralExpression(init)) return node.getName();
+    return null;
+  }
+  // `this.<name> = fn` inside a constructor function — the assignment is what names the callable.
+  if (Node.isBinaryExpression(node)) return thisAssignedFunctionName(node);
+  // `{ <name>: function(){} }`. Shorthand `{ <name>(){} }` is a MethodDeclaration, handled above.
+  if (Node.isPropertyAssignment(node)) {
+    const init = node.getInitializer();
+    if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return node.getName();
     return null;
   }
   return null;
+}
+
+/**
+ * The name in `this.<name> = <function|arrow>`, else null. Syntactic on purpose: `this` is lexical
+ * in an arrow and dynamic in a plain function, so a non-constructor still gets its members homed on
+ * it. Over-approximates rather than dropping the callable — deliberate, not a resolution.
+ */
+export function thisAssignedFunctionName(node: Node): string | null {
+  if (!Node.isBinaryExpression(node)) return null;
+  if (node.getOperatorToken().getKind() !== SyntaxKind.EqualsToken) return null;
+  const lhs = node.getLeft();
+  if (!Node.isPropertyAccessExpression(lhs)) return null;
+  if (lhs.getExpression().getKind() !== SyntaxKind.ThisKeyword) return null;
+  const rhs = node.getRight();
+  if (!Node.isArrowFunction(rhs) && !Node.isFunctionExpression(rhs)) return null;
+  return lhs.getName();
 }
 
 export function isCallableDecl(node: Node): boolean {
@@ -106,6 +133,14 @@ export function resolveCalleeSignature(
       return s && allSignatures.has(s) ? { signature: s, isConstructor: false } : null;
     }
     return null;
+  }
+
+  // `this.<name> = fn` and `{ <name>: function(){} }` are assignments, not declarations, so
+  // `isCallableDecl` does not cover them — but the checker hands them back as the declaration of
+  // the resolved property, and they are callables in the symbol table (issue #85).
+  if (Node.isBinaryExpression(decl) || Node.isPropertyAssignment(decl)) {
+    const s = computeSignatureForDecl(decl, root);
+    return s && allSignatures.has(s) ? { signature: s, isConstructor: false } : null;
   }
 
   if (isCallableDecl(decl)) {

@@ -9,7 +9,7 @@
 
 import type { EdgeRow, GraphRows, NodeRow, Props } from "./rows";
 import { chunk, cypherMap, cypherValue } from "./rows";
-import { CONSTRAINTS, INDEXES } from "./schema";
+import { CONSTRAINTS, INDEXES, nsAlt } from "./schema";
 
 const BATCH = 500;
 
@@ -37,8 +37,8 @@ function wipe(appName: string): string {
   const name = cypherValue(appName);
   return [
     `MATCH (a:Application {name: ${name}})`,
-    "OPTIONAL MATCH (a)-[:HAS_MODULE]->(m:Module)",
-    "OPTIONAL MATCH (m)-[:DECLARES|HAS_METHOD|HAS_ATTRIBUTE|DECLARES_VAR|HAS_CALLSITE*1..]->(x)",
+    `OPTIONAL MATCH (a)-[:${nsAlt("HAS_MODULE")}]->(m:Module)`,
+    `OPTIONAL MATCH (m)-[:${nsAlt("DECLARES", "HAS_METHOD", "HAS_ATTRIBUTE", "DECLARES_VAR", "HAS_CALLSITE")}*1..]->(x)`,
     "DETACH DELETE x, m, a;",
   ].join("\n");
 }

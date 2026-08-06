@@ -77,6 +77,16 @@ function diffSummary(tsc: CallGraphResult, jelly: CallGraphResult): string {
   );
 }
 
+/** execFileSync puts the whole command — every entry file — in Error.message. Keep it readable. */
+const briefly = (reason: string): string => reason.split("\n", 1)[0]!.slice(0, 160);
+
+/** Whether most analyzed modules are JavaScript, i.e. whether the tsc leg has types to work with. */
+function isJavaScriptMajority(symbol_table: Record<string, TSModule>): boolean {
+  const files = Object.keys(symbol_table);
+  const js = files.filter((f) => /\.(js|jsx|mjs|cjs)$/.test(f)).length;
+  return files.length > 0 && js * 2 > files.length;
+}
+
 /**
  * Run tsc + jelly and emit their union. This is the default: jelly's edges and external symbols are
  * PERSISTED (tagged `provenance: ["jelly"]`) instead of being discarded after a diff. If jelly
@@ -90,7 +100,17 @@ export const unionProvider: CallGraphProvider = {
     try {
       jelly = jellyProvider.build(ctx);
     } catch (e) {
-      ctx.log.info(`call graph (union): jelly failed (${(e as Error).message}); emitting tsc only`);
+      const reason = briefly((e as Error).message);
+      // Losing jelly is modest on TS, a cliff on JS (156 of 161 union edges on NodeGoat), and
+      // `info` is not printed at default verbosity — which made the JS case silent.
+      if (isJavaScriptMajority(ctx.symbol_table)) {
+        ctx.log.error(
+          `call graph (union): jelly failed (${reason}) on a JavaScript-majority project — ` +
+            `emitting tsc only, which typically loses most of the call graph`,
+        );
+      } else {
+        ctx.log.info(`call graph (union): jelly failed (${reason}); emitting tsc only`);
+      }
       return tsc;
     }
     ctx.log.info(`call graph diff: ${diffSummary(tsc, jelly)}`);

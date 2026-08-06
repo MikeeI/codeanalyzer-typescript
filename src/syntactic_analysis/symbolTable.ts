@@ -27,6 +27,9 @@ export function buildSymbolTable(
 
   const targets = opts.targetFiles ? resolveTargetFiles(root, opts.targetFiles) : null;
   const allProjectFiles = discoverSourceFiles(root, opts.skipTests);
+  if (allProjectFiles.length === 0) {
+    log.warn(`no source files found under ${root} — nothing to analyze`);
+  }
   // The set of files to BUILD (targets in -t mode, else all).
   const buildFiles = targets ?? allProjectFiles;
   // Add ALL project files to the program so cross-file resolution works even in -t mode.
