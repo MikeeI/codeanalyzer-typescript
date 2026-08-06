@@ -12,7 +12,7 @@ import * as path from "node:path";
 import {
   MARKER_LABELS,
   NODE_LABELS,
-  REL_TYPES,
+  REL_TYPES_NS,
   buildSchemaDocument,
   project,
   twinOf,
@@ -40,7 +40,7 @@ function fixtureRows() {
 
 const byLabel = new Map(NODE_LABELS.map((n) => [n.label, n]));
 const mergeOf = new Map(NODE_LABELS.map((n) => [n.label, n.mergeLabel]));
-const relByType = new Map(REL_TYPES.map((r) => [r.type, r]));
+const relByType = new Map(REL_TYPES_NS.map((r) => [r.type, r]));
 const markers = new Set<string>(MARKER_LABELS);
 const twins = new Set<string>([
   ...NODE_LABELS.map((n) => twinOf(n.label)),
@@ -93,7 +93,7 @@ describe("neo4j schema conformance", () => {
     expect(onDisk).toBe(fresh);
   });
 
-  test("every node carries exactly the TS twins of its base labels (1.1.0 dual-labeling)", () => {
+  test("every node carries exactly the TS twins of its base labels (2.0.0 dual-labeling)", () => {
     for (const node of rows.nodes) {
       const base = node.labels.filter((l) => !twins.has(l));
       expect(new Set(node.labels), `bad twin set on ${node.labels.join(":")} ${node.value}`).toEqual(
@@ -103,9 +103,9 @@ describe("neo4j schema conformance", () => {
     }
   });
 
-  test(":Application is stamped with the 1.1.0 contract version", () => {
+  test(":Application is stamped with the 2.0.0 contract version", () => {
     const app = rows.nodes.find((n) => n.labels[0] === "Application");
     expect(app).toBeDefined();
-    expect(app!.props.schema_version).toBe("1.1.0");
+    expect(app!.props.schema_version).toBe("2.0.0");
   });
 });

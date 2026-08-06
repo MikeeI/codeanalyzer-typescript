@@ -13,7 +13,7 @@
  * the :Application node of every emitted graph so any consumer can detect a producer/consumer
  * mismatch at runtime.
  */
-export const SCHEMA_VERSION = "1.1.0";
+export const SCHEMA_VERSION = "2.0.0";
 
 export type PropType = "string" | "integer" | "float" | "boolean" | "string[]" | "integer[]";
 
@@ -43,20 +43,44 @@ export const MARKER_LABELS = ["Entrypoint"] as const;
  * constraints are unchanged. The bare labels drop (and rel types gain `TS_`) in schema 2.0.0.
  */
 export const TS_PREFIX = "TS";
+export const JS_PREFIX = "JS";
 
-/** The TS-prefixed twin of a specific or marker label. */
-export const twinOf = (label: string): string => `${TS_PREFIX}${label}`;
+/** Source language of a module path — the namespace its nodes and outgoing edges carry. */
+export const langOf = (fileKey: string): string => (/\.(js|jsx|mjs|cjs)$/.test(fileKey) ? JS_PREFIX : TS_PREFIX);
+
+/**
+ * The namespace a node belongs to. Nodes carrying `_module` take that module's language; the ones
+ * that have none of their own — the application root, packages, external library symbols — take
+ * the analyzer's own TS namespace, since a sibling analyzer emits its own (PY*, …).
+ */
+const nsOf = (props?: { _module?: unknown }): string =>
+  typeof props?._module === "string" ? langOf(props._module) : TS_PREFIX;
+
+/** The namespaced twin of a specific or marker label. */
+export const twinOf = (label: string, ns: string = TS_PREFIX): string => `${ns}${label}`;
+
+/** A Cypher relationship-type alternation covering every namespace, e.g. `TS_DECLARES|JS_DECLARES`. */
+export const nsAlt = (...bases: string[]): string =>
+  bases.flatMap((b) => [TS_PREFIX, JS_PREFIX].map((ns) => `${ns}_${b}`)).join("|");
+
+/** An edge is namespaced by its source module's language, falling back to its target's. */
+export function relTypeFor(type: string, fromProps?: { _module?: unknown }, toProps?: { _module?: unknown }): string {
+  if (/^(TS|JS)_/.test(type)) return type;
+  const ns = typeof fromProps?._module === "string" ? langOf(fromProps._module) : nsOf(toProps);
+  return `${ns}_${type}`;
+}
 
 /**
  * Expand a projection label set with its twins: order preserved, `Symbol` skipped, idempotent.
  * Any label already starting with `TS` is treated as a twin and never re-prefixed — so no bare
  * label may legitimately begin with `TS`.
  */
-export function withTwins(labels: string[]): string[] {
+export function withTwins(labels: string[], props?: { _module?: unknown }): string[] {
+  const ns = nsOf(props);
   const out = [...labels];
   for (const l of labels) {
-    if (l === "Symbol" || l.startsWith(TS_PREFIX)) continue;
-    const t = twinOf(l);
+    if (l === "Symbol" || l.startsWith(TS_PREFIX) || l.startsWith(JS_PREFIX)) continue;
+    const t = twinOf(l, ns);
     if (!out.includes(t)) out.push(t);
   }
   return out;
@@ -375,15 +399,24 @@ export interface SchemaDocument {
   relationship_types: RelType[];
   constraints: readonly string[];
   indexes: readonly string[];
-  /** Specific/marker label → its TS-prefixed twin (both are present on every emitted node). */
-  label_twins: Record<string, string>;
+  /** Specific/marker label → its namespaced twins, one per language. */
+  label_twins: Record<string, string[]>;
 }
 
+/**
+ * Every relationship type the projection can emit: each declared type in both namespaces. REL_TYPES
+ * stays the single source of truth; this is derived so the two can never drift.
+ */
+export const REL_TYPES_NS: RelType[] = REL_TYPES.flatMap((r) =>
+  [TS_PREFIX, JS_PREFIX].map((ns) => ({ ...r, type: `${ns}_${r.type}` })),
+);
+
 /** One twin per specific label + per marker label — derived from the catalogs, never drifts. */
-function labelTwins(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const n of NODE_LABELS) out[n.label] = twinOf(n.label);
-  for (const m of MARKER_LABELS) out[m] = twinOf(m);
+function labelTwins(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const ns = [TS_PREFIX, JS_PREFIX];
+  for (const n of NODE_LABELS) out[n.label] = ns.map((p) => twinOf(n.label, p));
+  for (const m of MARKER_LABELS) out[m] = ns.map((p) => twinOf(m, p));
   return out;
 }
 
@@ -394,7 +427,7 @@ export function buildSchemaDocument(): SchemaDocument {
     generator: "codeanalyzer-typescript",
     marker_labels: MARKER_LABELS,
     node_labels: NODE_LABELS,
-    relationship_types: REL_TYPES,
+    relationship_types: REL_TYPES_NS,
     constraints: CONSTRAINTS,
     indexes: INDEXES,
     label_twins: labelTwins(),

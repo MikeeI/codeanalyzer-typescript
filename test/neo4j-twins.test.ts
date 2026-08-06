@@ -1,5 +1,5 @@
 /**
- * Twin-label vocabulary (graph schema 1.1.0, issue #65): every specific and marker label has a
+ * Twin-label vocabulary (graph schema 2.0.0, issue #65): every specific and marker label has a
  * TS-prefixed twin; the shared merge label `Symbol` deliberately has none (epic #64).
  */
 import { describe, expect, test } from "bun:test";
@@ -30,14 +30,14 @@ describe("TS twin-label vocabulary", () => {
     expect(withTwins(["Module", "TSModule"])).toEqual(["Module", "TSModule"]);
   });
 
-  test("schema version is 1.1.0 (additive MINOR)", () => {
-    expect(SCHEMA_VERSION).toBe("1.1.0");
+  test("schema version is 2.0.0 (additive MINOR)", () => {
+    expect(SCHEMA_VERSION).toBe("2.0.0");
   });
 
   test("schema document maps every specific + marker label to its twin", () => {
     const doc = buildSchemaDocument();
-    for (const n of NODE_LABELS) expect(doc.label_twins[n.label]).toBe(twinOf(n.label));
-    for (const m of MARKER_LABELS) expect(doc.label_twins[m]).toBe(twinOf(m));
+    for (const n of NODE_LABELS) expect(doc.label_twins[n.label]).toEqual([twinOf(n.label, "TS"), twinOf(n.label, "JS")]);
+    for (const m of MARKER_LABELS) expect(doc.label_twins[m]).toEqual([twinOf(m, "TS"), twinOf(m, "JS")]);
     expect(doc.label_twins["Symbol"]).toBeUndefined();
     expect(Object.keys(doc.label_twins).length).toBe(NODE_LABELS.length + MARKER_LABELS.length);
   });

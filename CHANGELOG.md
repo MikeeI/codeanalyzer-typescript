@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This is language-neutral: both were missed in TypeScript too.
 
 ### Changed
+- **BREAKING: Neo4j labels and relationship types are namespaced per source language** (#88).
+  Node labels gain a language twin — a `.js` module is `:Module:JSModule`, a `.ts` module is
+  `:Module:TSModule` — and every relationship type is prefixed: `JS_CALLS`, `TS_DECLARES`,
+  `JS_HAS_MODULE`, and so on. This matches `codeanalyzer-python`, which already namespaces every
+  edge (`PY_CALLS`, `PY_DECLARES`, …), so a database holding output from more than one analyzer no
+  longer mingles them.
+
+  An edge takes its **source** module's language, falling back to its target's — so the
+  application-to-module edge on a JavaScript project is `JS_HAS_MODULE`. Nodes with no language of
+  their own (the application root, packages, external library symbols) keep the analyzer's own `TS`
+  namespace, since a sibling analyzer emits its own.
+
+  **Migration:** every stored query against a graph produced by 0.5.0 or earlier must be updated —
+  `MATCH ()-[:CALLS]->()` becomes `MATCH ()-[:TS_CALLS|JS_CALLS]->()`. The Neo4j schema version
+  moves 1.1.0 → 2.0.0, which forces a full re-upsert on the next incremental push.
+
 - **A failed Jelly leg is now reported at error level on JavaScript-majority
   projects.** The union provider degrades to tsc-only when Jelly throws, and
   reported that at `info`, which is not printed at default verbosity. On JavaScript
