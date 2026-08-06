@@ -108,7 +108,7 @@ containerSuite("neo4j bolt writer", () => {
       // A known resolved call edge from the fixture (index.ts calls services.announce).
       expect(
         await num(
-          "MATCH (:Callable)-[:CALLS]->(t:Callable {name:$n}) RETURN count(*)",
+          "MATCH (:Callable)-[:TS_CALLS|JS_CALLS]->(t:Callable {name:$n}) RETURN count(*)",
           { n: "announce" },
         ),
       ).toBeGreaterThan(0);
