@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.0.0",
+  "schema_version": "2.1.0",
   "generator": "codeanalyzer-typescript",
   "marker_labels": [],
   "node_labels": [
@@ -193,10 +193,23 @@
         "id": "string",
         "kind": "string",
         "_module": "string",
+        "signature": "string",
         "name": "string",
+        "return_type": "string",
+        "cyclomatic_complexity": "integer",
+        "accessibility": "string",
+        "accessor_kind": "string",
+        "is_static": "boolean",
+        "is_abstract": "boolean",
+        "is_async": "boolean",
+        "is_generator": "boolean",
+        "is_exported": "boolean",
+        "is_ambient": "boolean",
+        "is_implicit": "boolean",
         "path": "string",
+        "start_column": "integer",
         "start_line": "integer",
-        "start_column": "integer"
+        "end_line": "integer"
       }
     }
   ],

@@ -71,6 +71,12 @@ export function indexCallableDecls(project: Project, root: string, onlyFiles?: S
           const sig = computeSignatureForDecl(n, root);
           if (sig && !idx.has(sig)) idx.set(sig, init);
         }
+      } else if (Node.isArrowFunction(n) || Node.isFunctionExpression(n)) {
+        // Unnamed: signed and bodied by the same node. The `const f = () => …` case is signed by
+        // its VariableDeclaration above, and computeSignatureForDecl returns null for the
+        // initializer itself, so this branch never double-claims it.
+        const sig = computeSignatureForDecl(n, root);
+        if (sig && !idx.has(sig)) idx.set(sig, n);
       }
     });
   }

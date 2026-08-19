@@ -44,7 +44,10 @@ export interface V2Root {
   param_out: V2ParamEdge[]; // L4
   // TS-additive (parity): edge endpoints outside the containment tree need an id home.
   external_symbols?: Record<string, V2External>; // L2 — imported/library call targets, keyed by id
-  synthesized_callables?: Record<string, V2Node>; // L2 — first-party anonymous callbacks, keyed by id
+  // L2 — 2.1.0 compatibility index: pre-2.1.0 anonymous-callable id → the tree id that replaced
+  // it. Anonymous callables are real nodes in the tree now; entries whose key equals their own
+  // `id` are the residual fallback nodes for signatures no provider could name.
+  synthesized_callables?: Record<string, V2Node>;
 }
 
 /** A call target outside the project (an imported library member / builtin) — an edge endpoint, not a tree node. */

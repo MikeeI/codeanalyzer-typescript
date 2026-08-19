@@ -23,7 +23,26 @@ export function contributorName(node: Node): string | null {
     if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) return node.getName();
     return null;
   }
+  if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) return anonName(node);
   return null;
+}
+
+/**
+ * The segment an unnamed function-like node contributes. Position is the only discriminant a
+ * nameless callable has, and it is the one both the resolver and Jelly can compute independently
+ * — which is what keeps caller-side and callee-side ids byte-identical. Angle brackets mark the
+ * segment synthetic (the `<init>`/`<clinit>` convention). It joins the dotted chain, so an
+ * anonymous callable lives in the durable id tier and never collides with the `@line:col`
+ * ordinal namespace that body nodes use.
+ *
+ * Returns null when a VariableDeclaration ancestor already names this callable (`const f = () =>`)
+ * — that case is handled above, and contributing here as well would double the segment.
+ */
+function anonName(node: Node): string | null {
+  const parent = node.getParent();
+  if (parent && Node.isVariableDeclaration(parent) && parent.getInitializer() === node) return null;
+  const { line, column } = node.getSourceFile().getLineAndColumnAtPos(node.getStart());
+  return `<anon@${line}:${column}>`;
 }
 
 export function isCallableDecl(node: Node): boolean {
@@ -40,8 +59,9 @@ export function isCallableDecl(node: Node): boolean {
 }
 
 /**
- * Compute the canonical signature for a declaration node. Returns null when the node is not a
- * nameable declaration (e.g. an anonymous inline callback).
+ * Compute the canonical signature for a declaration node. Unnamed function-like nodes are named
+ * positionally (see `anonName`), so this returns null only for nodes that are not declarations at
+ * all.
  */
 export function computeSignatureForDecl(node: Node, root: string): string | null {
   const sf = node.getSourceFile();
