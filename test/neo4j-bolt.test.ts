@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Neo4jContainer, type StartedNeo4jContainer } from "@testcontainers/neo4j";
 import neo4j, { type Driver } from "neo4j-driver";
-import { type BoltConfig, boltWriter, CONSTRAINTS, INDEXES, project } from "../src/build/neo4j";
+import { type BoltConfig, boltWriter, CONSTRAINTS, INDEXES, project, SCHEMA_VERSION } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
 import { toV2 } from "../src/schema/v2";
@@ -164,7 +164,7 @@ containerSuite("neo4j bolt writer", () => {
   );
 
   test(
-    "migrates a 1.1.0-shaped graph to 2.0.0, wiping legacy residue (#46)",
+    "migrates a 1.1.0-shaped graph to the current schema, wiping legacy residue (#46)",
     async () => {
       // Seed a minimal schema-1.1.0 graph on a clean store: twin labels, the old
       // name/file_key/signature keys, and an :Application keyed on `name` (no `id`).
@@ -180,7 +180,7 @@ containerSuite("neo4j bolt writer", () => {
         await seed.close();
       }
 
-      // A full 2.0.0 push against the same DB must detect the version mismatch and wipe the residue.
+      // A full current-version push against the same DB must detect the mismatch and wipe the residue.
       const opts = optsFor();
       const rows = project(toV2(await analyze(opts), opts));
       await boltWriter(rows, cfg, log, true);
@@ -190,7 +190,7 @@ containerSuite("neo4j bolt writer", () => {
       expect(await num("MATCH (a:Application) RETURN count(a)")).toBe(1);
       expect(
         await num(
-          "MATCH (a:Application) WHERE a.id IS NOT NULL AND a.schema_version = '2.0.0' RETURN count(a)",
+          `MATCH (a:Application) WHERE a.id IS NOT NULL AND a.schema_version = '${SCHEMA_VERSION}' RETURN count(a)`,
         ),
       ).toBe(1);
 

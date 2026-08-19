@@ -30,7 +30,7 @@ import { applyDataflow } from "./dataflow";
 import type { V2Application, V2BodyNode, V2CallEdge, V2Callable, V2External, V2Field, V2Module, V2Node, V2Root, V2Type } from "./model";
 
 const LANGUAGE = "typescript";
-const SCHEMA_VERSION = "2.0.0";
+const SCHEMA_VERSION = "2.1.0";
 const ANALYZER_NAME = "codeanalyzer-typescript";
 /** Highest analysis level this emitter populates today (L1 tree, L2 call graph, L3/L4 dataflow). */
 const MAX_IMPLEMENTED = 4;
@@ -310,14 +310,35 @@ function homeExternals(app: TSApplication, appId: string, idBySig: Map<string, s
 }
 
 /**
- * First-party anonymous callbacks (Jelly resolves them as endpoints; the symbol table never names
- * them). Their v1 signature is `<enclosing-sig>:<line:col>`, so they are addressed *ordinally* under
- * the enclosing callable: `<enclosing-can-id>@<line>:<col>` (the two-tier identity rule below the
- * callable line).
+ * The compatibility index for anonymous callables (schema 2.1.0).
+ *
+ * Anonymous callables are now real nodes in the containment tree, signed positionally
+ * (`<enclosing-sig>.<anon@line:col>`) and reachable by containment. This map is no longer a node
+ * registry: it maps the **pre-2.1.0 id** of each anonymous callable — `<enclosing-can-id>@<line>:<col>`,
+ * derived from the old `<enclosing-sig>:<line:col>` signature — onto the tree id that replaced it,
+ * so a consumer holding an old id can still resolve it.
+ *
+ * The old host was the nearest enclosing callable the old rules could name, which is recovered by
+ * stripping the trailing `<anon@…>` chain. An anonymous callable directly under a module had no
+ * resolvable old id (the old emitter fell back to an opaque `@synthetic/` key that encoded the
+ * ambiguous `<module>:<line:col>` signature, which was not unique across files) — those are
+ * skipped rather than reproduced.
+ *
+ * Any signature the call-graph provider still could not name is homed here too, unchanged, so the
+ * no-dangling rule holds even if a provider reports a function-like node the tree missed.
  */
 function homeSynthesized(app: TSApplication, appId: string, idBySig: Map<string, string>): Record<string, V2Node> {
   const out: Record<string, V2Node> = {};
+  for (const [sig, id] of [...idBySig.entries()]) {
+    const m = /^(.*?)((?:\.<anon@\d+:\d+>)+)$/.exec(sig);
+    if (!m) continue;
+    const host = idBySig.get(m[1] as string);
+    if (!host) continue; // module-level anonymous callable — no resolvable pre-2.1.0 id
+    const last = /<anon@(\d+):(\d+)>$/.exec(sig) as RegExpExecArray;
+    out[`${host}@${last[1]}:${last[2]}`] = { id, kind: "callable" };
+  }
   for (const [sig, sc] of Object.entries(app.synthesized_callables ?? {})) {
+    if (idBySig.has(sig)) continue; // the tree names it now
     const m = /^(.*):<?(\d+):(\d+)>?$/.exec(sig);
     const enclosing = m ? idBySig.get(m[1] as string) : undefined;
     const id = m && enclosing ? `${enclosing}@${m[2]}:${m[3]}` : `${appId}/@synthetic/${encodeURIComponent(sig)}`;

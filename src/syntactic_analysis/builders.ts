@@ -325,6 +325,9 @@ type Boundary = "callable" | "class" | "skip" | null;
 
 function namedBoundary(node: Node): Boundary {
   if (Node.isFunctionDeclaration(node)) return "callable";
+  // Unnamed arrows / function expressions are callables in their own right (they carry a
+  // positional signature), so their contents must not be attributed to the enclosing callable.
+  if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) return "callable";
   if (Node.isClassDeclaration(node) || Node.isClassExpression(node)) return "class";
   if (Node.isModuleDeclaration(node)) return "skip";
   if (Node.isVariableDeclaration(node)) {
@@ -357,6 +360,12 @@ function walkBody(body: Node, h: BodyHandlers): void {
     if (Node.isVariableDeclaration(node)) h.onLocal(node);
     node.forEachChild(visit);
   };
+  // A concise arrow body can *be* a callable (`() => () => x`). Visiting only the body's children
+  // would skip it and attribute its call sites to the callable that merely returns it.
+  if (namedBoundary(body) !== null) {
+    visit(body);
+    return;
+  }
   body.forEachChild(visit);
 }
 
@@ -409,6 +418,24 @@ function overloadsOf(fnNode: Node): TSOverloadSignature[] {
   }));
 }
 
+/**
+ * Build a callable from a node `walkBody` reported as a nested boundary. The three shapes are a
+ * named `function` declaration, a `const f = () => …` (signed by its VariableDeclaration but bodied
+ * by the initializer), and a bare unnamed arrow / function expression (signed and bodied by itself).
+ */
+function buildNestedCallable(n: Node, root: string): { sig: string; callable: TSCallable } | null {
+  if (Node.isVariableDeclaration(n)) {
+    const init = n.getInitializer();
+    if (!init) return null;
+    const k: TSCallableKind = Node.isArrowFunction(init) ? "arrow" : "function_expression";
+    return buildCallable(n, init, k, root);
+  }
+  if (Node.isArrowFunction(n) || Node.isFunctionExpression(n)) {
+    return buildCallable(n, n, Node.isArrowFunction(n) ? "arrow" : "function_expression", root);
+  }
+  return buildCallable(n, n, "function", root);
+}
+
 export function buildCallable(
   sigNode: Node,
   fnNode: Node,
@@ -429,16 +456,8 @@ export function buildCallable(
       onCall: (n) => call_sites.push(buildCallsite(n)),
       onLocal: (vd) => local_variables.push(buildVariable(vd, "function")),
       onNestedCallable: (n) => {
-        if (Node.isVariableDeclaration(n)) {
-          const init = n.getInitializer();
-          if (!init) return;
-          const k: TSCallableKind = Node.isArrowFunction(init) ? "arrow" : "function_expression";
-          const r = buildCallable(n, init, k, root);
-          if (r) inner_callables[r.sig] = r.callable;
-        } else {
-          const r = buildCallable(n, n, "function", root);
-          if (r) inner_callables[r.sig] = r.callable;
-        }
+        const r = buildNestedCallable(n, root);
+        if (r) inner_callables[r.sig] = r.callable;
       },
       onNestedClass: (n) => {
         const r = buildClass(n, root);
@@ -828,6 +847,20 @@ function buildStatemented(container: Node, root: string, varScope: TSVariableDec
       }
     }
   }
+  // Bare anonymous callables in top-level expression statements — `app.get('/x', (req, res) => …)`
+  // is the dominant Express idiom and is reachable through neither getFunctions() nor
+  // getVariableStatements(), which see declarations only. walkBody stops at every boundary the
+  // loops above already claimed, so nothing is collected twice.
+  walkBody(container, {
+    onCall: () => {},
+    onLocal: () => {},
+    onNestedCallable: (n) => {
+      if (!Node.isArrowFunction(n) && !Node.isFunctionExpression(n)) return; // already bucketed
+      const r = buildCallable(n, n, Node.isArrowFunction(n) ? "arrow" : "function_expression", root);
+      if (r) functions[r.sig] = r.callable;
+    },
+    onNestedClass: () => {},
+  });
   const namespaces: Record<string, TSNamespace> = {};
   for (const ns of c.getModules()) {
     const r = buildNamespace(ns, root);

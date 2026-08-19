@@ -19,7 +19,7 @@
  * SCHEMA_VERSION: MAJOR on a breaking change (renamed/removed label, relationship or key), MINOR
  * on additive. v2 is a MAJOR bump from v1 (keys moved signature→can:// id; labels reshaped).
  */
-export const SCHEMA_VERSION = "2.0.0";
+export const SCHEMA_VERSION = "2.1.0";
 
 export type PropType = "string" | "integer" | "float" | "boolean" | "string[]" | "integer[]";
 
@@ -125,10 +125,20 @@ export const NODE_LABELS: NodeLabel[] = [
   },
   { label: "TSExternal", mergeLabel: CAN, key: "id", properties: { ...COMMON, name: "string", module: "string" } },
   {
+    // 2.1.0: a marker label carried *alongside* :TSCallable by an unnamed arrow / function
+    // expression, which is now a real tree node reached by TS_DECLARES from its enclosing
+    // callable. It is no longer a node kind of its own — the property set is TSCallable's — but
+    // the label is retained so existing MATCH (:TSAnonymousCallable) queries keep resolving.
     label: "TSAnonymousCallable",
     mergeLabel: CAN,
     key: "id",
-    properties: { ...COMMON, name: "string", path: "string", start_line: "integer", start_column: "integer" },
+    properties: {
+      ...COMMON, signature: "string", name: "string", return_type: "string", cyclomatic_complexity: "integer",
+      accessibility: "string", accessor_kind: "string", is_static: "boolean", is_abstract: "boolean",
+      is_async: "boolean", is_generator: "boolean", is_exported: "boolean", is_ambient: "boolean", is_implicit: "boolean",
+      path: "string", start_column: "integer",
+      ...SPAN,
+    },
   },
 ];
 

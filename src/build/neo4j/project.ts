@@ -70,8 +70,12 @@ export function project(app: V2Application, _appName?: string): GraphRows {
   for (const ext of Object.values((root.external_symbols ?? {}) as Record<string, V2External>)) {
     b.node([CAN, "TSExternal"], "id", ext.id, prune({ id: ext.id, kind: "external", name: ext.name, module: ext.module }));
   }
-  // First-party anonymous callbacks (edge endpoints the tree never names).
-  for (const sc of Object.values((root.synthesized_callables ?? {}) as Record<string, V2Node>)) {
+  // 2.1.0: `synthesized_callables` is mostly a compatibility index (old id → tree id) whose targets
+  // are already projected as tree nodes. Only the residual fallback entries — a signature no
+  // provider could name, recognisable because the map key IS the entry's own id — still need a
+  // standalone node, so call-graph edges pointing at them do not dangle.
+  for (const [key, sc] of Object.entries((root.synthesized_callables ?? {}) as Record<string, V2Node>)) {
+    if (key !== sc.id) continue;
     b.node([CAN, "TSAnonymousCallable"], "id", sc.id, prune({
       id: sc.id, kind: "callable", name: str(sc.name), path: str(sc.path),
       start_line: spanLine(sc, "start"), start_column: spanCol(sc, "start"),
@@ -114,8 +118,15 @@ function projectType(b: RowBuilder, t: V2Type, parent: NodeRef, fileKey: string)
   for (const f of Object.values(t.fields ?? {})) projectField(b, f, node, fileKey);
 }
 
+/** An unnamed callable's signature ends with the positional segment `contributorName` gives it. */
+const ANON_SIG = /\.<anon@\d+:\d+>$/;
+
 function projectCallable(b: RowBuilder, c: V2Callable, owner: NodeRef, ownerRel: string, fileKey: string): void {
-  const node = b.node([CAN, "TSCallable"], "id", c.id, callableProps(c, fileKey));
+  // An unnamed callable carries :TSAnonymousCallable alongside :TSCallable — one node, two labels,
+  // reached by ordinary containment. That is what keeps pre-2.1.0 MATCH (:TSAnonymousCallable)
+  // queries working and puts these nodes on the snapshot wipe's containment walk (issue #75).
+  const labels = ANON_SIG.test(c.signature) ? [CAN, "TSCallable", "TSAnonymousCallable"] : [CAN, "TSCallable"];
+  const node = b.node(labels, "id", c.id, callableProps(c, fileKey));
   b.edge(ownerRel, owner, node);
 
   // Body nodes (L1: call sites; L3+: statements + synthetic vertices) + their overlays.
