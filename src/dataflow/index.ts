@@ -37,9 +37,8 @@ import {
   type ProgramGraphs,
   type TSCallable,
   type TSCallsite,
-  type TSClass,
   type TSModule,
-  type TSNamespace,
+  forEachCallable,
 } from "../schema";
 import type { Logger } from "../utils";
 import { extractCallableData, indexCallableDecls } from "./extract";
@@ -76,11 +75,11 @@ export function startExtraction(
   const callables = collectCallables(symbol_table);
 
   // Partition callables by owning file (round-robin over the sorted file list) so each worker
-  // deeply visits only its share of the program. TSCallable.path is the declaration's ABSOLUTE
+  // deeply visits only its share of the program. TSCallable.abs_path is the declaration's ABSOLUTE
   // file path; the graph data carries the project-relative file key.
   const byFile = new Map<string, Array<{ signature: string; path: string; absPath: string }>>();
   for (const [sig, c] of [...callables.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    const absPath = c.path;
+    const absPath = c.abs_path;
     const arr = byFile.get(absPath) ?? [];
     arr.push({ signature: sig, path: fileKeyOf(absPath, opts.input).fileKey, absPath });
     byFile.set(absPath, arr);
@@ -163,7 +162,7 @@ function extractSequential(
   for (const [sig, c] of [...callables.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const fn = astIndex.get(sig);
     if (!fn) continue; // bodiless (interface/abstract/ambient/implicit) or unmatchable
-    const data = extractCallableData(sig, fn, fileKeyOf(c.path, opts.input).fileKey, opts.input, opts.graphFieldDepth);
+    const data = extractCallableData(sig, fn, fileKeyOf(c.abs_path, opts.input).fileKey, opts.input, opts.graphFieldDepth);
     if (data) out.set(sig, data);
   }
   return out;
@@ -195,7 +194,7 @@ export async function buildProgramGraphs(
       for (const site of (callables.get(sig) as TSCallable).call_sites) {
         const nodeId = containingNode(data, site);
         if (nodeId === null) continue;
-        refs.push({ nodeId, callee: site.callee_signature, argCount: site.argument_types.length });
+        refs.push({ nodeId, callee: site.callee_signature ?? null, argCount: site.argument_types.length });
       }
       refs.sort((a, b) => a.nodeId - b.nodeId || (a.callee ?? "").localeCompare(b.callee ?? ""));
       callSites.set(sig, refs);
@@ -389,8 +388,8 @@ function persistSummaries(
     const entries: Record<string, unknown> = {};
     for (const sig of [...summaries.keys()].sort()) {
       const c = callables.get(sig);
-      // TSCallable.path is absolute; the symbol table is keyed by the project-relative file key.
-      const fileKey = c ? fileKeyOf(c.path, opts.input).fileKey : null;
+      // TSCallable.abs_path is absolute; the symbol table is keyed by the project-relative file key.
+      const fileKey = c ? fileKeyOf(c.abs_path, opts.input).fileKey : null;
       entries[sig] = {
         ...summaries.get(sig),
         content_hash: (fileKey && symbol_table[fileKey]?.content_hash) ?? null,
@@ -404,34 +403,11 @@ function persistSummaries(
 }
 
 // ------------------------------------------------------------------------------------------------
-// Symbol-table collection (signature → callable), recursing through every container kind
+// Symbol-table collection (signature → callable) — the shared containment walk (schema.ts)
 // ------------------------------------------------------------------------------------------------
 
 function collectCallables(symbol_table: Record<string, TSModule>): Map<string, TSCallable> {
   const out = new Map<string, TSCallable>();
-  for (const mod of Object.values(symbol_table)) collectModule(mod, out);
+  for (const mod of Object.values(symbol_table)) forEachCallable(mod, (c) => out.set(c.signature, c));
   return out;
-}
-
-function collectModule(mod: TSModule, out: Map<string, TSCallable>): void {
-  for (const f of Object.values(mod.functions)) collectCallable(f, out);
-  for (const c of Object.values(mod.classes)) collectClass(c, out);
-  for (const ns of Object.values(mod.namespaces)) collectNamespace(ns, out);
-}
-
-function collectNamespace(ns: TSNamespace, out: Map<string, TSCallable>): void {
-  for (const f of Object.values(ns.functions)) collectCallable(f, out);
-  for (const c of Object.values(ns.classes)) collectClass(c, out);
-  for (const n of Object.values(ns.namespaces)) collectNamespace(n, out);
-}
-
-function collectClass(c: TSClass, out: Map<string, TSCallable>): void {
-  for (const m of Object.values(c.methods)) collectCallable(m, out);
-  for (const ic of Object.values(c.inner_classes)) collectClass(ic, out);
-}
-
-function collectCallable(c: TSCallable, out: Map<string, TSCallable>): void {
-  out.set(c.signature, c);
-  for (const ic of Object.values(c.inner_callables)) collectCallable(ic, out);
-  for (const cl of Object.values(c.inner_classes)) collectClass(cl, out);
 }

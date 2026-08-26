@@ -14,11 +14,11 @@ import {
   CALL_DEP,
   type TSCallEdge,
   type TSCallable,
-  type TSClass,
   type TSExternalSymbol,
   type TSModule,
-  type TSNamespace,
   type TSSynthesizedCallable,
+  type TSType,
+  forEachCallable,
 } from "../schema";
 import { resolveCalleeSignature } from "../schema";
 import type { Logger } from "../utils";
@@ -49,16 +49,14 @@ export function buildCallGraph(
   //    these, and gating uses the full (merged) table so a cross-program in-project call resolves.
   const allSignatures = new Set<string>();
   for (const mod of Object.values(symbol_table)) {
-    const sigs: TSCallable[] = [];
-    collectModule(mod, sigs);
-    for (const c of sigs) allSignatures.add(c.signature);
+    forEachCallable(mod, (c) => allSignatures.add(c.signature));
   }
   // Callables to ITERATE: only this program's modules (all modules when `only` is undefined), so a
   // multi-program build attributes each call site to the program whose options actually resolve it.
   const callables: TSCallable[] = [];
   for (const [key, mod] of Object.entries(symbol_table)) {
     if (only && !only.has(key)) continue;
-    collectModule(mod, callables);
+    forEachCallable(mod, (c) => callables.push(c));
   }
 
   // 2. Index call/new expression AST nodes by full span so we can match recorded call sites.
@@ -135,7 +133,7 @@ export function buildCallGraph(
   for (const caller of callables) {
     for (const site of caller.call_sites) {
       const node = callExprIndex.get(
-        `${caller.path}#${site.start_line}:${site.start_column}-${site.end_line}:${site.end_column}`,
+        `${caller.abs_path}#${site.start_line}:${site.start_column}-${site.end_line}:${site.end_column}`,
       );
       if (!node) {
         unresolved++;
@@ -233,24 +231,24 @@ function indexClasses(
   classMeta: Map<string, ClassMeta>,
   childrenOf: Map<string, Set<string>>,
 ): void {
-  const visitClass = (cl: TSClass): void => {
-    classMeta.set(cl.signature, {
-      is_abstract: cl.is_abstract,
-      methods: new Set(Object.values(cl.methods).map((m) => m.name)),
-    });
-    for (const base of cl.base_classes) {
-      if (!childrenOf.has(base)) childrenOf.set(base, new Set());
-      childrenOf.get(base)!.add(cl.signature);
+  // RTA reach: module- and namespace-scoped classes only — classes local to a callable body are
+  // deliberately outside the dispatch universe (the historical reach, kept bit-for-bit).
+  const visitType = (t: TSType): void => {
+    if (t.kind === "class") {
+      classMeta.set(t.signature, {
+        is_abstract: t.is_abstract ?? false,
+        methods: new Set(Object.values(t.callables ?? {}).map((m) => m.name)),
+      });
+      for (const base of t.base_classes ?? []) {
+        if (!childrenOf.has(base)) childrenOf.set(base, new Set());
+        childrenOf.get(base)!.add(t.signature);
+      }
+    } else if (t.kind === "namespace") {
+      for (const nt of Object.values(t.types ?? {})) visitType(nt);
     }
-    for (const ic of Object.values(cl.inner_classes)) visitClass(ic);
-  };
-  const visitNs = (ns: TSNamespace): void => {
-    for (const cl of Object.values(ns.classes)) visitClass(cl);
-    for (const n of Object.values(ns.namespaces)) visitNs(n);
   };
   for (const mod of Object.values(symbol_table)) {
-    for (const cl of Object.values(mod.classes)) visitClass(cl);
-    for (const n of Object.values(mod.namespaces)) visitNs(n);
+    for (const t of Object.values(mod.types)) visitType(t);
   }
 }
 
@@ -270,31 +268,4 @@ function indexCallExpressions(project: Project): Map<string, Node> {
     });
   }
   return idx;
-}
-
-// --- recursive collection of every callable signature in the symbol table ---
-
-function collectModule(mod: TSModule, out: TSCallable[]): void {
-  for (const f of Object.values(mod.functions)) collectCallable(f, out);
-  for (const c of Object.values(mod.classes)) collectClass(c, out);
-  for (const i of Object.values(mod.interfaces)) for (const m of Object.values(i.methods)) collectCallable(m, out);
-  for (const ns of Object.values(mod.namespaces)) collectNamespace(ns, out);
-}
-
-function collectNamespace(ns: TSNamespace, out: TSCallable[]): void {
-  for (const f of Object.values(ns.functions)) collectCallable(f, out);
-  for (const c of Object.values(ns.classes)) collectClass(c, out);
-  for (const i of Object.values(ns.interfaces)) for (const m of Object.values(i.methods)) collectCallable(m, out);
-  for (const n of Object.values(ns.namespaces)) collectNamespace(n, out);
-}
-
-function collectClass(c: TSClass, out: TSCallable[]): void {
-  for (const m of Object.values(c.methods)) collectCallable(m, out);
-  for (const ic of Object.values(c.inner_classes)) collectClass(ic, out);
-}
-
-function collectCallable(c: TSCallable, out: TSCallable[]): void {
-  out.push(c);
-  for (const ic of Object.values(c.inner_callables)) collectCallable(ic, out);
-  for (const cl of Object.values(c.inner_classes)) collectClass(cl, out);
 }

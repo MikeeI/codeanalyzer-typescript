@@ -12,7 +12,7 @@ import * as path from "node:path";
 import pkg from "../package.json";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import type { GraphSelector, TSApplication } from "../src/schema";
+import { forEachCallable, forEachType, type GraphSelector, type TSApplication } from "../src/schema";
 import { type V2Application, type V2Callable, type V2Module, type V2Type, toV2Detailed } from "../src/schema/v2";
 import { type GraphRows, project } from "../src/build/neo4j";
 import { tscProvider } from "../src/semantic_analysis";
@@ -222,21 +222,15 @@ describe("schema v2 — inheritance resolves heritage signatures to can:// ids (
   });
 });
 
-describe("schema v2 — L1 superset", () => {
-  test("every v1 callable/type signature has a v2 id", () => {
-    const v1sigs = new Set<string>();
-    const addType = (t: { signature: string; methods?: Record<string, { signature: string }> }): void => {
-      v1sigs.add(t.signature);
-      for (const m of Object.values(t.methods ?? {})) v1sigs.add(m.signature);
-    };
+describe("schema v2 — L1 id registration", () => {
+  test("every tree callable/type signature has a v2 id", () => {
+    const sigs = new Set<string>();
     for (const m of Object.values(v1.symbol_table)) {
-      for (const t of Object.values(m.classes)) addType(t);
-      for (const t of Object.values(m.interfaces)) addType(t);
-      for (const t of Object.values(m.enums)) v1sigs.add(t.signature);
-      for (const t of Object.values(m.type_aliases)) v1sigs.add(t.signature);
-      for (const fn of Object.values(m.functions)) v1sigs.add(fn.signature);
+      forEachCallable(m, (c) => sigs.add(c.signature));
+      forEachType(m, (t) => sigs.add(t.signature));
     }
-    const missing = [...v1sigs].filter((s) => !idBySig.has(s));
+    expect(sigs.size).toBeGreaterThan(0);
+    const missing = [...sigs].filter((s) => !idBySig.has(s));
     expect(missing).toEqual([]);
   });
 });

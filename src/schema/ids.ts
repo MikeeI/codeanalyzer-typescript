@@ -1,0 +1,38 @@
+/**
+ * Canonical `can://` id construction for schema v2 (durable ids, ≥ callable depth) and the
+ * member-key rule for the tree's named maps. Pure functions, no runtime imports — mirrors
+ * python's `codeanalyzer/schema/ids.py`.
+ *
+ * Ids embed the app name (`--app-name`, per-invocation), while the symbol table round-trips the
+ * analysis cache across runs — so ids are NEVER baked at build time; `assignIds` stamps every
+ * node fresh each run (see assignIds.ts).
+ */
+
+const LANGUAGE = "typescript";
+
+export function applicationIdOf(appName: string): string {
+  return `can://${LANGUAGE}/${appName}`;
+}
+
+export function moduleIdOf(appId: string, fileKey: string): string {
+  return `${appId}/${fileKey}`;
+}
+
+/** The module/signature prefix: the file key without its TS/JS extension. */
+export function modulePrefixOf(fileKey: string): string {
+  return fileKey.replace(/\.d\.ts$/, "").replace(/\.(tsx|ts|jsx|js|mts|cts|mjs|cjs)$/, "");
+}
+
+/** The containment-path id of a descendant, derived from its dotted signature. */
+export function idFromSig(moduleId: string, modulePrefix: string, sig: string): string {
+  const tail = sig.startsWith(`${modulePrefix}.`) ? sig.slice(modulePrefix.length + 1) : sig;
+  return `${moduleId}/${tail.split(".").join("/")}`;
+}
+
+/** The map key for a callable/type within its parent: the last signature segment (+ accessor tag). */
+export function memberKey(sig: string, accessorKind?: string | null): string {
+  const seg = sig.split(".").pop() ?? sig;
+  if (accessorKind === "getter") return `${seg}#get`;
+  if (accessorKind === "setter") return `${seg}#set`;
+  return seg;
+}

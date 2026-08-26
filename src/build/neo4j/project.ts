@@ -154,7 +154,7 @@ function projectCallable(b: RowBuilder, c: V2Callable, owner: NodeRef, ownerRel:
 
 function projectField(b: RowBuilder, f: V2Field, owner: NodeRef, fileKey: string): void {
   const node = b.node([CAN, "TSField"], "id", f.id, prune({
-    id: f.id, kind: "field", name: str(f.name), type: str((f as V2Node).type), ...span(f), _module: fileKey,
+    id: f.id, kind: "field", name: str(f.name), type: str((f as unknown as V2Node).type), ...span(f), _module: fileKey,
   }));
   b.edge("TS_HAS_FIELD", owner, node);
 }
@@ -165,32 +165,32 @@ function projectField(b: RowBuilder, f: V2Field, owner: NodeRef, fileKey: string
 
 function moduleProps(mod: V2Module, fileKey: string): Props {
   return prune({
-    id: mod.id, kind: "module", name: str((mod as V2Node).module_name) ?? fileKey,
-    is_tsx: bool((mod as V2Node).is_tsx), is_declaration_file: bool((mod as V2Node).is_declaration_file),
-    content_hash: str((mod as V2Node).content_hash), ...span(mod), _module: fileKey,
+    id: mod.id, kind: "module", name: str((mod as unknown as V2Node).module_name) ?? fileKey,
+    is_tsx: bool((mod as unknown as V2Node).is_tsx), is_declaration_file: bool((mod as unknown as V2Node).is_declaration_file),
+    content_hash: str((mod as unknown as V2Node).content_hash), ...span(mod), _module: fileKey,
   });
 }
 
 function typeProps(t: V2Type, fileKey: string): Props {
   return prune({
-    id: t.id, kind: t.kind, signature: str(t.signature), name: str((t as V2Node).name),
-    base_classes: strArr((t as V2Node).base_classes), implements_types: strArr((t as V2Node).implements_types),
-    aliased_type: str((t as V2Node).aliased_type),
-    is_abstract: bool((t as V2Node).is_abstract), is_const: bool((t as V2Node).is_const),
-    is_exported: bool((t as V2Node).is_exported), is_ambient: bool((t as V2Node).is_ambient),
+    id: t.id, kind: t.kind, signature: str(t.signature), name: str((t as unknown as V2Node).name),
+    base_classes: strArr((t as unknown as V2Node).base_classes), implements_types: strArr((t as unknown as V2Node).implements_types),
+    aliased_type: str((t as unknown as V2Node).aliased_type),
+    is_abstract: bool((t as unknown as V2Node).is_abstract), is_const: bool((t as unknown as V2Node).is_const),
+    is_exported: bool((t as unknown as V2Node).is_exported), is_ambient: bool((t as unknown as V2Node).is_ambient),
     ...span(t),
   });
 }
 
 function callableProps(c: V2Callable, fileKey: string): Props {
   return prune({
-    id: c.id, kind: c.kind, signature: str(c.signature), name: str((c as V2Node).name),
-    return_type: str((c as V2Node).return_type), cyclomatic_complexity: num((c as V2Node).cyclomatic_complexity),
-    accessibility: str((c as V2Node).accessibility), accessor_kind: str((c as V2Node).accessor_kind),
-    is_static: bool((c as V2Node).is_static), is_abstract: bool((c as V2Node).is_abstract),
-    is_async: bool((c as V2Node).is_async), is_generator: bool((c as V2Node).is_generator),
-    is_exported: bool((c as V2Node).is_exported), is_ambient: bool((c as V2Node).is_ambient),
-    is_implicit: bool((c as V2Node).is_implicit), ...span(c), _module: fileKey,
+    id: c.id, kind: c.kind, signature: str(c.signature), name: str((c as unknown as V2Node).name),
+    return_type: str((c as unknown as V2Node).return_type), cyclomatic_complexity: num((c as unknown as V2Node).cyclomatic_complexity),
+    accessibility: str((c as unknown as V2Node).accessibility), accessor_kind: str((c as unknown as V2Node).accessor_kind),
+    is_static: bool((c as unknown as V2Node).is_static), is_abstract: bool((c as unknown as V2Node).is_abstract),
+    is_async: bool((c as unknown as V2Node).is_async), is_generator: bool((c as unknown as V2Node).is_generator),
+    is_exported: bool((c as unknown as V2Node).is_exported), is_ambient: bool((c as unknown as V2Node).is_ambient),
+    is_implicit: bool((c as unknown as V2Node).is_implicit), ...span(c), _module: fileKey,
   });
 }
 
