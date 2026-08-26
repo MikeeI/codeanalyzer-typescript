@@ -365,13 +365,66 @@ export interface TSSynthesizedCallable {
   start_column: number;
 }
 
-export interface TSApplication {
+/**
+ * The analyzer's INTERNAL working set: the live tree plus the signature-keyed provider outputs.
+ * `finalizeAnalysis` consumes it and assembles the wire (`TSAnalysis`); it is never serialized
+ * itself. (The program-graph IR travels separately — see AnalysisResult.)
+ */
+export interface AnalysisInternal {
   symbol_table: Record<string, TSModule>;
   call_graph: TSCallEdge[];
   external_symbols: Record<string, TSExternalSymbol>;
   synthesized_callables: Record<string, TSSynthesizedCallable>;
-  /** Level-3 CFG/PDG/SDG section — present only at `-a 3` (see schema/graphs.ts). */
-  program_graphs?: import("./graphs").ProgramGraphs;
+}
+
+// ----------------------------------------------------------------------------------------------
+// The wire: envelope → application root → cross-callable edges (what analysis.json IS, and what
+// the Neo4j projection consumes)
+// ----------------------------------------------------------------------------------------------
+
+export interface TSAnalysis {
+  schema_version: string; // "2.1.0"
+  language: string; // "typescript"
+  max_level: number; // highest level populated; consumers read this, not key-sniffing
+  k_limit?: number; // access-path depth bound for the L3/L4 dataflow (present at L3+)
+  analyzer: TSAnalyzer; // which analyzer produced this artifact, and at what version
+  application: TSApplication;
+}
+
+/** Analyzer identity — lets consumers correlate an `analysis.json` with the tool/version that emitted it. */
+export interface TSAnalyzer {
+  name: string; // "codeanalyzer-typescript"
+  version: string; // ANALYZER_VERSION (src/utils/version.ts)
+}
+
+/** The application ROOT node (python's PyApplication): the containment tree + app-scope overlays. */
+export interface TSApplication {
+  id: string; // can://<lang>/<app>
+  kind: "application";
+  symbol_table: Record<string, TSModule>; // keyed by project-relative POSIX path (with extension)
+  call_graph: TSCallGraphEdge[]; // L2 — callable → callable (empty at L1)
+  param_in: TSParamEdge[]; // L4 (empty until L4)
+  param_out: TSParamEdge[]; // L4
+  // TS-additive (parity): edge endpoints outside the containment tree need an id home.
+  external_symbols?: Record<string, import("./homing").TSExternalNode>; // L2 — library call targets, keyed by id
+  // L2 — 2.1.0 compatibility index: pre-2.1.0 anonymous-callable id → the tree id that replaced
+  // it. Entries whose key equals their own `id` are the residual fallback nodes for signatures no
+  // provider could name.
+  synthesized_callables?: Record<string, import("./homing").TSSynthesizedNode>;
+}
+
+/** A wire call-graph edge: identity-only, can:// endpoints (l2Callees re-identifies onto these). */
+export interface TSCallGraphEdge {
+  src: string;
+  dst: string;
+  prov: string[]; // provenance, e.g. ["tsc"], ["jelly"]
+  weight: number;
+}
+
+export interface TSParamEdge {
+  src: string;
+  dst: string;
+  var?: string;
 }
 
 // ----------------------------------------------------------------------------------------------

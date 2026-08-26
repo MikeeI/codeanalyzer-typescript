@@ -11,7 +11,7 @@
  * the call-graph re-identification (l2Callees.ts).
  */
 
-import type { TSApplication, TSSpan } from "./schema";
+import type { AnalysisInternal, TSSpan } from "./schema";
 
 /** A call target outside the project (an imported library member / builtin) — an edge endpoint, not a tree node. */
 export interface TSExternalNode {
@@ -31,7 +31,7 @@ export interface TSSynthesizedNode {
 }
 
 /** External library call targets → `can://…/@external/<module>/<name>` ids on the application root. */
-export function homeExternals(app: TSApplication, appId: string, idBySig: Map<string, string>): Record<string, TSExternalNode> {
+export function homeExternals(app: AnalysisInternal, appId: string, idBySig: Map<string, string>): Record<string, TSExternalNode> {
   const out: Record<string, TSExternalNode> = {};
   for (const [sig, ext] of Object.entries(app.external_symbols ?? {})) {
     const id = `${appId}/@external/${ext.module}/${ext.name}`;
@@ -59,7 +59,7 @@ export function homeExternals(app: TSApplication, appId: string, idBySig: Map<st
  * Any signature the call-graph provider still could not name is homed here too, unchanged, so the
  * no-dangling rule holds even if a provider reports a function-like node the tree missed.
  */
-export function homeSynthesized(app: TSApplication, appId: string, idBySig: Map<string, string>): Record<string, TSSynthesizedNode> {
+export function homeSynthesized(app: AnalysisInternal, appId: string, idBySig: Map<string, string>): Record<string, TSSynthesizedNode> {
   const out: Record<string, TSSynthesizedNode> = {};
   for (const [sig, id] of [...idBySig.entries()]) {
     const m = /^(.*?)((?:\.<anon@\d+:\d+>)+)$/.exec(sig);

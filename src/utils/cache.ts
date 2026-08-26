@@ -1,13 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { TSCallEdge, TSModule } from "../schema";
+import type { TSModule } from "../schema";
 import { sha256 } from "./fs";
 import { ANALYZER_VERSION } from "./version";
 
 export interface CacheData {
   analyzer_version?: string;
   symbol_table: Record<string, TSModule>;
-  call_graph: TSCallEdge[];
 }
 
 export function cacheFilePath(cacheDir: string): string {

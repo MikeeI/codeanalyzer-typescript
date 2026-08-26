@@ -18,14 +18,14 @@
 import * as path from "node:path";
 import type { AnalysisOptions } from "../options";
 import { ANALYZER_VERSION } from "../utils/version";
-import type { TSApplication } from "./schema";
+import type { AnalysisInternal, TSAnalysis, TSApplication } from "./schema";
+import type { ProgramGraphs } from "./graphs";
 import { assignIds } from "./assignIds";
 import { populateL1Body } from "./l1Body";
 import { resolveHeritageIds } from "./heritage";
 import { homeExternals, homeSynthesized } from "./homing";
 import { backfillCallees, reidentifyCallGraph } from "./l2Callees";
 import { applyDataflow } from "../dataflow/attach";
-import type { V2Application, V2Root } from "./v2/model";
 
 const LANGUAGE = "typescript";
 const SCHEMA_VERSION = "2.1.0";
@@ -41,14 +41,15 @@ const INTERNAL_KEYS = new Set<string>(["call_sites", "abs_path", "content_hash",
 // ----------------------------------------------------------------------------------------------
 
 export interface AnalysisResult {
-  application: V2Application; // the wire: deep, internal-field-stripped envelope
-  internal: TSApplication; // the live internal aggregate (tree + sig-keyed provider outputs + program_graphs)
+  application: TSAnalysis; // the wire: deep, internal-field-stripped envelope
+  internal: AnalysisInternal; // the live internal working set (tree + sig-keyed provider outputs)
+  program_graphs?: ProgramGraphs; // the L3/L4 compute IR (already attached onto the wire tree)
   idBySig: Map<string, string>; // signature → can:// id (real callables + externals + synthesized)
   collisions: string[]; // signatures that mapped to two distinct ids (L1 id-uniqueness gate)
   dangling: string[]; // call-graph endpoints with no id home (L2 no-dangling gate; should be empty)
 }
 
-export function finalizeAnalysis(app: TSApplication, opts: AnalysisOptions): AnalysisResult {
+export function finalizeAnalysis(app: AnalysisInternal, pg: ProgramGraphs | null, opts: AnalysisOptions): AnalysisResult {
   const level = opts.analysisLevel;
   const appName = (opts.appName ?? (opts.input ? path.basename(opts.input) : "") ?? "").trim() || "app";
 
@@ -57,7 +58,7 @@ export function finalizeAnalysis(app: TSApplication, opts: AnalysisOptions): Ana
   populateL1Body(app);
   resolveHeritageIds(app, idBySig);
 
-  const root: V2Root = { id: appId, kind: "application", symbol_table: app.symbol_table, call_graph: [], param_in: [], param_out: [] };
+  const root: TSApplication = { id: appId, kind: "application", symbol_table: app.symbol_table, call_graph: [], param_in: [], param_out: [] };
 
   // L2 — home the off-tree edge endpoints, backfill `callee`, re-identify the call graph.
   const dangling: string[] = [];
@@ -70,12 +71,12 @@ export function finalizeAnalysis(app: TSApplication, opts: AnalysisOptions): Ana
 
   // L3/L4 — grow body{} + cfg/cdg/ddg/summary on callables and param_in/param_out on the app.
   let k_limit: number | undefined;
-  if (level >= 3 && app.program_graphs) {
-    applyDataflow(root, app.program_graphs, idBySig, callableBySig, level);
-    k_limit = app.program_graphs.k_limit;
+  if (level >= 3 && pg) {
+    applyDataflow(root, pg, idBySig, callableBySig, level);
+    k_limit = pg.k_limit;
   }
 
-  const envelope: V2Application = {
+  const envelope: TSAnalysis = {
     schema_version: SCHEMA_VERSION,
     language: LANGUAGE,
     max_level: Math.min(level, MAX_IMPLEMENTED),
@@ -86,6 +87,6 @@ export function finalizeAnalysis(app: TSApplication, opts: AnalysisOptions): Ana
   // The wire copy: deep, detached from the live tree, internal fields stripped by key.
   const application = JSON.parse(
     JSON.stringify(envelope, (key, value) => (INTERNAL_KEYS.has(key) ? undefined : value)),
-  ) as V2Application;
-  return { application, internal: app, idBySig, collisions, dangling };
+  ) as TSAnalysis;
+  return { application, internal: app, ...(pg ? { program_graphs: pg } : {}), idBySig, collisions, dangling };
 }

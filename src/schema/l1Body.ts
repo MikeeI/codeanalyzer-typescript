@@ -9,7 +9,7 @@
  * the whole pass chain idempotent across repeated emissions at different levels.
  */
 
-import type { TSApplication, TSBodyNode, TSCallable, TSCallsite, TSModule } from "./schema";
+import type { AnalysisInternal, TSBodyNode, TSCallable, TSCallsite, TSModule } from "./schema";
 import { forEachCallable } from "./schema";
 
 /**
@@ -58,7 +58,7 @@ function resetCallable(c: TSCallable): void {
   delete c.summary;
 }
 
-export function populateL1Body(app: TSApplication): void {
+export function populateL1Body(app: AnalysisInternal): void {
   for (const mod of Object.values(app.symbol_table) as TSModule[]) {
     forEachCallable(mod, resetCallable);
   }

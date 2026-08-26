@@ -1,16 +1,16 @@
 /**
- * project() — the pure projection from the schema-v2 additive-CPG tree (`V2Application`) to graph
+ * project() — the pure projection from the schema-v2 additive-CPG tree (`TSAnalysis`) to graph
  * rows. It walks the uniform tree (module → types/functions/fields → callables → body) emitting one
  * graph node per tree/body node keyed on its `can://` id, containment as HAS_x / DECLARES edges, and
  * every typed overlay (call_graph, cfg/cdg/ddg/summary, param_in/param_out) as a typed relationship.
  * No I/O: the writers (cypher snapshot / bolt incremental) consume the returned `GraphRows`.
  *
- * The graph is a second projection of the SAME v2 shape the JSON path emits (serialize.ts → toV2),
+ * The graph is a second projection of the SAME v2 envelope the JSON path emits (finalizeAnalysis),
  * so JSON and graph never diverge. Every project-owned node carries `_module` (its owning file key,
  * for the incremental writer's per-module isolation); shared nodes (External) carry none.
  */
 
-import type { V2Application, V2BodyNode, V2Callable, V2External, V2Field, V2Module, V2Node, V2Root, V2Type } from "../../schema/v2";
+import type { TSAnalysis, TSApplication, TSBodyNode, TSCallable, TSField, TSModule, TSType } from "../../schema";
 import { SCHEMA_VERSION } from "./schema";
 import { type GraphRows, type NodeRef, type Props, RowBuilder, prune } from "./rows";
 
@@ -41,9 +41,9 @@ const KIND_LABEL: Record<string, string> = {
   function_expression: "TSCallable",
 };
 
-export function project(app: V2Application, _appName?: string): GraphRows {
+export function project(app: TSAnalysis, _appName?: string): GraphRows {
   const b = new RowBuilder();
-  const root: V2Root = app.application;
+  const root: TSApplication = app.application;
 
   const appRef = b.node(["Application", "TSApplication"], "id", root.id, prune({
     id: root.id,
@@ -67,19 +67,19 @@ export function project(app: V2Application, _appName?: string): GraphRows {
   }
 
   // External library targets (shared nodes — no _module).
-  for (const ext of Object.values((root.external_symbols ?? {}) as Record<string, V2External>)) {
+  for (const ext of Object.values(root.external_symbols ?? {})) {
     b.node([CAN, "TSExternal"], "id", ext.id, prune({ id: ext.id, kind: "external", name: ext.name, module: ext.module }));
   }
   // 2.1.0: `synthesized_callables` is mostly a compatibility index (old id → tree id) whose targets
   // are already projected as tree nodes. Only the residual fallback entries — a signature no
   // provider could name, recognisable because the map key IS the entry's own id — still need a
   // standalone node, so call-graph edges pointing at them do not dangle.
-  for (const [key, sc] of Object.entries((root.synthesized_callables ?? {}) as Record<string, V2Node>)) {
+  for (const [key, sc] of Object.entries(root.synthesized_callables ?? {})) {
     if (key !== sc.id) continue;
     b.node([CAN, "TSAnonymousCallable"], "id", sc.id, prune({
-      id: sc.id, kind: "callable", name: str(sc.name), path: str(sc.path),
-      start_line: spanLine(sc, "start"), start_column: spanCol(sc, "start"),
-      _module: str(sc.path),
+      id: sc.id, kind: "callable", name: sc.name ?? null, path: sc.path ?? null,
+      start_line: sc.span?.start?.[0] ?? null, start_column: sc.span?.start?.[1] ?? null,
+      _module: sc.path ?? null,
     }));
   }
 
@@ -96,13 +96,13 @@ export function project(app: V2Application, _appName?: string): GraphRows {
 // ----------------------------------------------------------------------------------------------
 
 /** Walk a scope's child maps (module OR namespace: types + functions + fields). */
-function projectScope(b: RowBuilder, scope: V2Module | V2Type, parent: NodeRef, fileKey: string): void {
+function projectScope(b: RowBuilder, scope: TSModule | TSType, parent: NodeRef, fileKey: string): void {
   for (const t of Object.values(scope.types ?? {})) projectType(b, t, parent, fileKey);
   for (const c of Object.values(scope.functions ?? {})) projectCallable(b, c, parent, "TS_DECLARES", fileKey);
   for (const f of Object.values(scope.fields ?? {})) projectField(b, f, parent, fileKey);
 }
 
-function projectType(b: RowBuilder, t: V2Type, parent: NodeRef, fileKey: string): void {
+function projectType(b: RowBuilder, t: TSType, parent: NodeRef, fileKey: string): void {
   const label = KIND_LABEL[t.kind] ?? "TSClass";
   const node = b.node([CAN, label], "id", t.id, typeProps(t, fileKey));
   b.edge("TS_DECLARES", parent, node);
@@ -121,7 +121,7 @@ function projectType(b: RowBuilder, t: V2Type, parent: NodeRef, fileKey: string)
 /** An unnamed callable's signature ends with the positional segment `contributorName` gives it. */
 const ANON_SIG = /\.<anon@\d+:\d+>$/;
 
-function projectCallable(b: RowBuilder, c: V2Callable, owner: NodeRef, ownerRel: string, fileKey: string): void {
+function projectCallable(b: RowBuilder, c: TSCallable, owner: NodeRef, ownerRel: string, fileKey: string): void {
   // An unnamed callable carries :TSAnonymousCallable alongside :TSCallable — one node, two labels,
   // reached by ordinary containment. That is what keeps pre-2.1.0 MATCH (:TSAnonymousCallable)
   // queries working and puts these nodes on the snapshot wipe's containment walk (issue #75).
@@ -152,9 +152,9 @@ function projectCallable(b: RowBuilder, c: V2Callable, owner: NodeRef, ownerRel:
   for (const t of Object.values(c.types ?? {})) projectType(b, t, node, fileKey);
 }
 
-function projectField(b: RowBuilder, f: V2Field, owner: NodeRef, fileKey: string): void {
+function projectField(b: RowBuilder, f: TSField, owner: NodeRef, fileKey: string): void {
   const node = b.node([CAN, "TSField"], "id", f.id, prune({
-    id: f.id, kind: "field", name: str(f.name), type: str((f as unknown as V2Node).type), ...span(f), _module: fileKey,
+    id: f.id, kind: "field", name: f.name, type: f.type ?? null, ...span(f), _module: fileKey,
   }));
   b.edge("TS_HAS_FIELD", owner, node);
 }
@@ -163,40 +163,42 @@ function projectField(b: RowBuilder, f: V2Field, owner: NodeRef, fileKey: string
 // property flattening (v2 node attrs → Neo4j-legal scalars/arrays)
 // ----------------------------------------------------------------------------------------------
 
-function moduleProps(mod: V2Module, fileKey: string): Props {
+function moduleProps(mod: TSModule, fileKey: string): Props {
+  // The wire strips the internal fields (module_name, content_hash) — the graph name is the
+  // file key, exactly as the historical projection of the stripped tree produced.
   return prune({
-    id: mod.id, kind: "module", name: str((mod as unknown as V2Node).module_name) ?? fileKey,
-    is_tsx: bool((mod as unknown as V2Node).is_tsx), is_declaration_file: bool((mod as unknown as V2Node).is_declaration_file),
-    content_hash: str((mod as unknown as V2Node).content_hash), ...span(mod), _module: fileKey,
+    id: mod.id, kind: "module", name: fileKey,
+    is_tsx: mod.is_tsx, is_declaration_file: mod.is_declaration_file,
+    ...span(mod), _module: fileKey,
   });
 }
 
-function typeProps(t: V2Type, fileKey: string): Props {
+function typeProps(t: TSType, fileKey: string): Props {
   return prune({
-    id: t.id, kind: t.kind, signature: str(t.signature), name: str((t as unknown as V2Node).name),
-    base_classes: strArr((t as unknown as V2Node).base_classes), implements_types: strArr((t as unknown as V2Node).implements_types),
-    aliased_type: str((t as unknown as V2Node).aliased_type),
-    is_abstract: bool((t as unknown as V2Node).is_abstract), is_const: bool((t as unknown as V2Node).is_const),
-    is_exported: bool((t as unknown as V2Node).is_exported), is_ambient: bool((t as unknown as V2Node).is_ambient),
+    id: t.id, kind: t.kind, signature: t.signature, name: t.name,
+    base_classes: strArr(t.base_classes), implements_types: strArr(t.implements_types),
+    aliased_type: t.aliased_type ?? null,
+    is_abstract: t.is_abstract ?? null, is_const: t.is_const ?? null,
+    is_exported: t.is_exported, is_ambient: t.is_ambient,
     ...span(t),
   });
 }
 
-function callableProps(c: V2Callable, fileKey: string): Props {
+function callableProps(c: TSCallable, fileKey: string): Props {
   return prune({
-    id: c.id, kind: c.kind, signature: str(c.signature), name: str((c as unknown as V2Node).name),
-    return_type: str((c as unknown as V2Node).return_type), cyclomatic_complexity: num((c as unknown as V2Node).cyclomatic_complexity),
-    accessibility: str((c as unknown as V2Node).accessibility), accessor_kind: str((c as unknown as V2Node).accessor_kind),
-    is_static: bool((c as unknown as V2Node).is_static), is_abstract: bool((c as unknown as V2Node).is_abstract),
-    is_async: bool((c as unknown as V2Node).is_async), is_generator: bool((c as unknown as V2Node).is_generator),
-    is_exported: bool((c as unknown as V2Node).is_exported), is_ambient: bool((c as unknown as V2Node).is_ambient),
-    is_implicit: bool((c as unknown as V2Node).is_implicit), ...span(c), _module: fileKey,
+    id: c.id, kind: c.kind, signature: c.signature, name: c.name,
+    return_type: c.return_type ?? null, cyclomatic_complexity: c.cyclomatic_complexity,
+    accessibility: c.accessibility ?? null, accessor_kind: c.accessor_kind ?? null,
+    is_static: c.is_static, is_abstract: c.is_abstract,
+    is_async: c.is_async, is_generator: c.is_generator,
+    is_exported: c.is_exported, is_ambient: c.is_ambient,
+    is_implicit: c.is_implicit, ...span(c), _module: fileKey,
   });
 }
 
-function bodyProps(bn: V2BodyNode, id: string, fileKey: string): Props {
+function bodyProps(bn: TSBodyNode, id: string, fileKey: string): Props {
   return prune({
-    id, kind: bn.kind, of: str(bn.of), parent: str(bn.parent),
+    id, kind: bn.kind, of: bn.of ?? null, parent: bn.parent ?? null,
     callee: typeof bn.callee === "string" ? bn.callee : null, ...span(bn), _module: fileKey,
   });
 }
@@ -217,7 +219,7 @@ const edges = (x: unknown): Edge[] => (Array.isArray(x) ? (x as Edge[]) : []);
 /** A cross-edge endpoint is already the graph node's can:// id — pass it through unchanged. */
 const idOf = (endpoint: string): string => endpoint;
 
-function moduleKeyOf(mod: V2Module): string {
+function moduleKeyOf(mod: TSModule): string {
   // id = can://<lang>/<app>/<fileKey>; the fileKey is everything after the 3rd '/' past the scheme.
   const m = /^can:\/\/[^/]+\/[^/]+\/(.+)$/.exec(mod.id);
   return m ? (m[1] as string) : mod.id;
@@ -227,17 +229,5 @@ function span(n: { span?: { start: [number, number]; end: [number, number] } }):
   if (!n.span) return {};
   return { start_line: n.span.start?.[0], end_line: n.span.end?.[0] };
 }
-function spanLine(n: V2Node, which: "start" | "end"): number | undefined {
-  const s = n.span as { start?: [number, number]; end?: [number, number] } | undefined;
-  return s?.[which]?.[0];
-}
-function spanCol(n: V2Node, which: "start" | "end"): number | undefined {
-  const s = n.span as { start?: [number, number]; end?: [number, number] } | undefined;
-  return s?.[which]?.[1];
-}
-
-// value coercion (v2 attrs are `unknown`; Neo4j props must be scalars / homogeneous arrays)
-const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
-const bool = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
-const strArr = (v: unknown): string[] | null => (Array.isArray(v) && v.every((x) => typeof x === "string") && v.length ? (v as string[]) : null);
+// A present-but-empty string list is a non-fact in the graph (matches the historical projection).
+const strArr = (v: string[] | undefined): string[] | null => (v && v.length ? v : null);

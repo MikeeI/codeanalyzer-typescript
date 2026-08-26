@@ -7,7 +7,7 @@
  * previous run under another app name are recomputed; unresolvable sets are deleted).
  */
 
-import type { TSApplication, TSModule, TSType } from "./schema";
+import type { AnalysisInternal, TSModule, TSType } from "./schema";
 import { forEachType } from "./schema";
 
 function resolve(sigs: string[], idBySig: Map<string, string>): string[] {
@@ -30,7 +30,7 @@ function doType(t: TSType, idBySig: Map<string, string>): void {
   if (implementsIds.length) t.implements_ids = implementsIds;
 }
 
-export function resolveHeritageIds(app: TSApplication, idBySig: Map<string, string>): void {
+export function resolveHeritageIds(app: AnalysisInternal, idBySig: Map<string, string>): void {
   for (const mod of Object.values(app.symbol_table) as TSModule[]) {
     forEachType(mod, (t) => doType(t, idBySig));
   }

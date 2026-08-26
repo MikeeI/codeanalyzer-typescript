@@ -10,11 +10,11 @@
  *    (the L2 no-dangling gate; should be empty) and their edges dropped.
  */
 
-import type { TSApplication, TSCallEdge, TSModule } from "./schema";
+import type { AnalysisInternal, TSCallEdge, TSCallGraphEdge, TSModule } from "./schema";
 import { forEachCallable } from "./schema";
 import { callBodyKeys } from "./l1Body";
 
-export function backfillCallees(app: TSApplication, idBySig: Map<string, string>): void {
+export function backfillCallees(app: AnalysisInternal, idBySig: Map<string, string>): void {
   for (const mod of Object.values(app.symbol_table) as TSModule[]) {
     forEachCallable(mod, (c) => {
       for (const [key, cs] of callBodyKeys(c.call_sites)) {
@@ -27,19 +27,12 @@ export function backfillCallees(app: TSApplication, idBySig: Map<string, string>
   }
 }
 
-export interface WireCallEdge {
-  src: string;
-  dst: string;
-  prov: string[];
-  weight: number;
-}
-
 export function reidentifyCallGraph(
   edges: TSCallEdge[],
   idBySig: Map<string, string>,
   dangling: string[],
-): WireCallEdge[] {
-  const out: WireCallEdge[] = [];
+): TSCallGraphEdge[] {
+  const out: TSCallGraphEdge[] = [];
   for (const e of edges) {
     const src = idBySig.get(e.source);
     const dst = idBySig.get(e.target);

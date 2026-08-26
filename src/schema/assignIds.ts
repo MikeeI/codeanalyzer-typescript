@@ -9,7 +9,7 @@
  */
 
 import { applicationIdOf, idFromSig, memberKey, moduleIdOf, modulePrefixOf } from "./ids";
-import type { TSApplication, TSCallable, TSField, TSType } from "./schema";
+import type { AnalysisInternal, TSCallable, TSField, TSType } from "./schema";
 
 export interface AssignedIds {
   appId: string;
@@ -18,7 +18,7 @@ export interface AssignedIds {
   collisions: string[]; // signatures that mapped to two distinct ids (L1 id-uniqueness gate)
 }
 
-export function assignIds(app: TSApplication, appName: string): AssignedIds {
+export function assignIds(app: AnalysisInternal, appName: string): AssignedIds {
   const appId = applicationIdOf(appName);
   const idBySig = new Map<string, string>();
   const callableBySig = new Map<string, TSCallable>();
