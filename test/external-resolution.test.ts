@@ -48,7 +48,7 @@ function options(): AnalysisOptions {
 async function run(): Promise<TSApplication> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-ext-test-"));
   try {
-    return await analyze({ ...options(), cacheDir });
+    return (await analyze({ ...options(), cacheDir })).internal;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }

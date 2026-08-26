@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import { type V2Callable, type V2Module, type V2Node, toV2Detailed } from "../src/schema/v2";
+import type { V2Callable, V2Module, V2Node } from "../src/schema/v2";
 import { project } from "../src/build/neo4j";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/anon-app");
@@ -44,7 +44,7 @@ function options(level: number): AnalysisOptions {
 }
 
 const opts = options(4);
-const { application, idBySig, collisions, dangling } = toV2Detailed(await analyze(opts), opts);
+const { application, idBySig, collisions, dangling } = await analyze(opts);
 const root = application.application;
 const mod = root.symbol_table["src/routes.ts"] as V2Module;
 const fns = mod.functions as Record<string, V2Callable>;

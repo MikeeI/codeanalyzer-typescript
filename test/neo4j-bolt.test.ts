@@ -93,7 +93,7 @@ containerSuite("neo4j bolt writer", () => {
     "full push materializes the whole graph + schema",
     async () => {
       const opts = optsFor();
-      const rows = project(toV2(await analyze(opts), opts));
+      const rows = project((await analyze(opts)).application);
       await boltWriter(rows, cfg, log, true);
 
       // Every projected node/edge lands (the fixture has no library deps, so endpoints all resolve).
@@ -133,7 +133,7 @@ containerSuite("neo4j bolt writer", () => {
     "re-pushing identical analysis is idempotent",
     async () => {
       const opts = optsFor();
-      const rows = project(toV2(await analyze(opts), opts));
+      const rows = project((await analyze(opts)).application);
       await boltWriter(rows, cfg, log, true);
       expect(await num("MATCH (n) RETURN count(n)")).toBe(rows.nodes.length);
       expect(await num("MATCH ()-[r]->() RETURN count(r)")).toBe(rows.edges.length);
@@ -145,7 +145,7 @@ containerSuite("neo4j bolt writer", () => {
     "a full run prunes a module whose source vanished",
     async () => {
       const opts = optsFor();
-      const app = await analyze(opts);
+      const app = (await analyze(opts)).internal;
       const victim = Object.keys(app.symbol_table).sort()[0];
       delete app.symbol_table[victim];
 
@@ -182,7 +182,7 @@ containerSuite("neo4j bolt writer", () => {
 
       // A full current-version push against the same DB must detect the mismatch and wipe the residue.
       const opts = optsFor();
-      const rows = project(toV2(await analyze(opts), opts));
+      const rows = project((await analyze(opts)).application);
       await boltWriter(rows, cfg, log, true);
 
       // Exactly one :Application survives — the fresh v2 one (id set, version bumped). The 1.x app,

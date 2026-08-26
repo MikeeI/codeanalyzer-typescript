@@ -20,7 +20,6 @@ import * as path from "node:path";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
 import { renderCypher, project } from "../src/build/neo4j";
-import { toV2Detailed } from "../src/schema/v2";
 
 const GOLDEN_DIR = path.resolve(import.meta.dir, "goldens");
 const REGEN = !!process.env["GOLDEN_REGEN"];
@@ -68,8 +67,7 @@ async function capture(fixture: string, level: number): Promise<Captured> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-golden-"));
   try {
     const opts = { ...options(fixture, level), cacheDir };
-    const app = await analyze(opts);
-    const { application } = toV2Detailed(app, opts);
+    const { application } = await analyze(opts);
     const cypher =
       level === 4
         ? renderCypher(project(application, application.application.id), application.application.id).split("\n").sort()

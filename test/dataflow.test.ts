@@ -43,7 +43,7 @@ function options(level: 1 | 2 | 3, cacheDir: string, jobs: number): AnalysisOpti
 async function run(level: 1 | 2 | 3, jobs = 1): Promise<Awaited<ReturnType<typeof analyze>>> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-dataflow-test-"));
   try {
-    return await analyze(options(level, cacheDir, jobs));
+    return (await analyze(options(level, cacheDir, jobs))).internal;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }

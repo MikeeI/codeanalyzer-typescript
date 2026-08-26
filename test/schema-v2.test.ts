@@ -47,7 +47,7 @@ function options(): AnalysisOptions {
 async function run(): Promise<TSApplication> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-test-"));
   try {
-    return await analyze({ ...options(), cacheDir });
+    return (await analyze({ ...options(), cacheDir })).internal;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -245,7 +245,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
     const spy = spyOn(tscProvider, "build");
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l1-guard-"));
     try {
-      const v1L1 = await analyze({ ...options(), analysisLevel: 1, callGraphProvider: "tsc", cacheDir });
+      const v1L1 = (await analyze({ ...options(), analysisLevel: 1, callGraphProvider: "tsc", cacheDir })).internal;
       expect(spy).not.toHaveBeenCalled();
       expect(v1L1.call_graph).toEqual([]);
       expect(Object.keys(v1L1.external_symbols)).toEqual([]);
@@ -260,7 +260,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
     const spy = spyOn(tscProvider, "build");
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l1-guard-l2-"));
     try {
-      const v1L2guard = await analyze({ ...options(), analysisLevel: 2, callGraphProvider: "tsc", cacheDir });
+      const v1L2guard = (await analyze({ ...options(), analysisLevel: 2, callGraphProvider: "tsc", cacheDir })).internal;
       expect(spy).toHaveBeenCalledTimes(1);
       expect(v1L2guard.call_graph.length).toBeGreaterThan(0);
     } finally {
@@ -274,7 +274,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
 async function runL2(): Promise<TSApplication> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l2-"));
   try {
-    return await analyze({ ...options(), analysisLevel: 2, cacheDir });
+    return (await analyze({ ...options(), analysisLevel: 2, cacheDir })).internal;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -338,7 +338,7 @@ function dfOptions(level: 3 | 4): AnalysisOptions {
 async function runDF(level: 3 | 4): Promise<TSApplication> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), `cants-v2-l${level}-`));
   try {
-    return await analyze({ ...dfOptions(level), cacheDir });
+    return (await analyze({ ...dfOptions(level), cacheDir })).internal;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -563,8 +563,7 @@ function optsAt(level: 1 | 2 | 3 | 4): AnalysisOptions {
 async function appAt(level: 1 | 2 | 3 | 4): Promise<V2Application> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-mono-"));
   try {
-    const v1run = await analyze({ ...optsAt(level), cacheDir });
-    return toV2Detailed(v1run, optsAt(level)).application;
+    return (await analyze({ ...optsAt(level), cacheDir })).application;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }

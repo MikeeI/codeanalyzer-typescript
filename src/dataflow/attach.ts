@@ -1,6 +1,8 @@
 /**
- * L3/L4 dataflow → the v2 tree. Transforms the v1 `program_graphs` (CFG / PDG[=CDG+DDG] / SDG,
- * keyed by (signature, integer node_id)) into the additive-CPG placement:
+ * L3/L4 dataflow → the v2 tree (the ATTACH step): the stage that computes the program graphs also
+ * writes them onto the tree (python parity). Transforms the internal `program_graphs` compute IR
+ * (CFG / PDG[=CDG+DDG] / SDG, keyed by (signature, integer node_id)) into the additive-CPG
+ * placement:
  *
  *   L3 (-a 3): grow each callable's `body{}` with statement nodes (+ `@entry`/`@exit`), and hang
  *              the intra-callable edge lists `cfg`/`cdg`/`ddg` (bare local ids) on the callable.
@@ -15,9 +17,8 @@
  *   param→contracted out of the L3 CFG; '@formal_in:N' at L4, statement→'line:col'.
  */
 
-import type { CfgEdge, GraphNode, PdgEdge, ProgramGraphs } from "../graphs";
-import type { TSApplication } from "../schema";
-import type { V2Callable, V2ParamEdge, V2Root } from "./model";
+import type { CfgEdge, GraphNode, PdgEdge, ProgramGraphs } from "../schema/graphs";
+import type { V2Callable, V2ParamEdge, V2Root } from "../schema/v2/model";
 
 interface LocalIds {
   canId: string;
@@ -227,13 +228,12 @@ function emitL4(root: V2Root, pg: ProgramGraphs, info: Map<string, LocalIds>): v
  */
 export function applyDataflow(
   root: V2Root,
-  app: TSApplication,
+  pg: ProgramGraphs,
   idBySig: Map<string, string>,
   callableBySig: Map<string, V2Callable>,
   level: number,
 ): void {
-  const pg = app.program_graphs;
-  if (!pg || level < 3) return;
+  if (level < 3) return;
 
   const info = new Map<string, LocalIds>();
   for (const [sig, fg] of Object.entries(pg.functions)) {

@@ -5,14 +5,19 @@ import { loadCache, saveCache } from "./utils";
 import { materialize } from "./build";
 import type { AnalysisOptions } from "./options";
 import type { TSApplication } from "./schema";
+import { type AnalysisResult, finalizeAnalysis } from "./schema/emit";
 import { buildSymbolTable } from "./syntactic_analysis";
 import { Logger } from "./utils";
 
+export type { AnalysisResult } from "./schema/emit";
+
 /**
- * The orchestrator. Order mirrors the reference analyzers: materialize deps → build the symbol
- * table → build the resolver call graph → cache the base → return the Application.
+ * The orchestrator. Order mirrors the reference analyzers (python core.py): materialize deps →
+ * build the symbol table → call-graph providers → program graphs → cache the id-free base →
+ * run the per-run pass spine (ids / body / heritage / homing / callees / attach) and assemble
+ * the wire envelope. Returns BOTH views: the wire `application` and the live `internal` tree.
  */
-export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
+export async function analyze(opts: AnalysisOptions): Promise<AnalysisResult> {
   const log = new Logger(opts.verbosity);
   log.info(`analyzing ${opts.input} (level ${opts.analysisLevel})`);
   const cacheDir = opts.cacheDir ?? path.join(opts.input, ".codeanalyzer");
@@ -79,6 +84,8 @@ export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
     app.program_graphs = await buildProgramGraphs(extraction, symbol_table, opts, log);
   }
 
+  // Cache the id-free base (ids/body/heritage are per-run layers stamped by finalizeAnalysis;
+  // the cached tree must stay --app-name-free).
   saveCache(cacheDir, { symbol_table, call_graph });
-  return app;
+  return finalizeAnalysis(app, opts);
 }
