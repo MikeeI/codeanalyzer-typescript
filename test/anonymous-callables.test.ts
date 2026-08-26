@@ -13,7 +13,8 @@ import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import type { V2Callable, V2Module, V2Node } from "../src/schema/v2";
+import type { TSCallable, TSModule } from "../src/schema";
+import type { TSSynthesizedNode } from "../src/schema/homing";
 import { project } from "../src/build/neo4j";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/anon-app");
@@ -46,13 +47,13 @@ function options(level: number): AnalysisOptions {
 const opts = options(4);
 const { application, idBySig, collisions, dangling } = await analyze(opts);
 const root = application.application;
-const mod = root.symbol_table["src/routes.ts"] as V2Module;
-const fns = mod.functions as Record<string, V2Callable>;
+const mod = root.symbol_table["src/routes.ts"] as TSModule;
+const fns = mod.functions as Record<string, TSCallable>;
 
-const login = fns["login"] as V2Callable;
-const handler = (login.callables ?? {})["<anon@2:10>"] as V2Callable;
+const login = fns["login"] as TSCallable;
+const handler = (login.callables ?? {})["<anon@2:10>"] as TSCallable;
 
-/** Edge lists are typed `unknown[]` on V2Callable until the body-node model lands (roadmap #2). */
+/** Edge lists are typed `unknown[]` on TSCallable until the body-node model lands (roadmap #2). */
 type Edge = { src: string; dst: string; var?: string };
 const edges = (xs: unknown[] | undefined): Edge[] => (xs ?? []) as Edge[];
 
@@ -72,30 +73,30 @@ describe("anonymous callables are first-class (issue #92)", () => {
   });
 
   test("a variable-bound arrow keeps its own name — no <anon> segment", () => {
-    expect((fns["named"] as V2Callable).signature).toBe("src/routes.named");
+    expect((fns["named"] as TSCallable).signature).toBe("src/routes.named");
     expect(Object.keys(fns)).not.toContain("<anon@17:15>");
   });
 
   test("a bare arrow in a module-level expression statement is materialized", () => {
-    const h = fns["<anon@13:20>"] as V2Callable;
+    const h = fns["<anon@13:20>"] as TSCallable;
     expect(h).toBeDefined();
     expect(h.kind).toBe("arrow");
     expect(edges(h.ddg).some((e) => e.var === "req.query.probe")).toBe(true);
   });
 
   test("nested anonymous callables chain their segments", () => {
-    const outer = fns["outer"] as V2Callable;
-    const first = Object.values(outer.callables ?? {})[0] as V2Callable;
-    const second = Object.values(first.callables ?? {})[0] as V2Callable;
+    const outer = fns["outer"] as TSCallable;
+    const first = Object.values(outer.callables ?? {})[0] as TSCallable;
+    const second = Object.values(first.callables ?? {})[0] as TSCallable;
     expect(second.signature.match(/<anon@\d+:\d+>/g)).toHaveLength(2);
     expect(second.id.startsWith(first.id)).toBe(true);
   });
 
   test("call sites re-anchor from the enclosing callable to the arrow", () => {
-    const calleeOf = (c: V2Callable): unknown[] =>
+    const calleeOf = (c: TSCallable): unknown[] =>
       Object.values(c.body ?? {}).filter((n) => n.kind === "call").map((n) => n.callee);
     expect(calleeOf(login)).toEqual([]);
-    expect(calleeOf(handler)).toEqual([`${(fns["query"] as V2Callable).id}`]);
+    expect(calleeOf(handler)).toEqual([`${(fns["query"] as TSCallable).id}`]);
 
     const srcs = root.call_graph.map((e) => e.src);
     expect(srcs).toContain(handler.id);
@@ -128,7 +129,7 @@ describe("anonymous callables are first-class (issue #92)", () => {
   });
 
   test("synthesized_callables is a compatibility index onto the tree", () => {
-    const index = (root.synthesized_callables ?? {}) as Record<string, V2Node>;
+    const index = (root.synthesized_callables ?? {}) as Record<string, TSSynthesizedNode>;
     expect(index[`${login.id}@2:10`]?.id).toBe(handler.id);
     // Every entry either points at a tree node or is a residual fallback node keyed by its own id.
     for (const [key, entry] of Object.entries(index)) {

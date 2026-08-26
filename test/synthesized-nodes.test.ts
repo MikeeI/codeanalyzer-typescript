@@ -7,8 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { project } from "../src/build/neo4j";
 import type { AnalysisOptions } from "../src/options";
-import { CALL_DEP, type TSApplication, type TSCallable, type TSModule, type TSSpan } from "../src/schema";
-import { toV2Detailed } from "../src/schema/v2";
+import { CALL_DEP, type AnalysisInternal, type TSCallable, type TSModule, type TSSpan, finalizeAnalysis } from "../src/schema";
 
 const ANON = "src/x.foo:<3:10>";
 const SPAN: TSSpan = { start: [1, 1], end: [5, 1], bytes: [0, 10] };
@@ -16,7 +15,7 @@ const SPAN: TSSpan = { start: [1, 1], end: [5, 1], bytes: [0, 10] };
 const callable = (signature: string, name: string): TSCallable =>
   ({ signature, name, kind: "function", span: SPAN, parameters: [], call_sites: [], inner_callables: {}, inner_classes: {} }) as unknown as TSCallable;
 
-const app: TSApplication = {
+const app: AnalysisInternal = {
   symbol_table: {
     "src/x.ts": {
       module_name: "src/x", source: "", span: SPAN,
@@ -30,7 +29,7 @@ const app: TSApplication = {
 };
 
 const opts = { appName: "t", input: "", analysisLevel: 2 } as unknown as AnalysisOptions;
-const { application, idBySig } = toV2Detailed(app, opts);
+const { application, idBySig } = finalizeAnalysis(app, null, opts);
 const rows = project(application);
 
 const fooId = idBySig.get("src/x.foo") as string;

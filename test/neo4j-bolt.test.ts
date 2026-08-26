@@ -15,7 +15,7 @@ import neo4j, { type Driver } from "neo4j-driver";
 import { type BoltConfig, boltWriter, CONSTRAINTS, INDEXES, project, SCHEMA_VERSION } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import { toV2 } from "../src/schema/v2";
+import { finalizeAnalysis } from "../src/schema";
 import { Logger } from "../src/utils";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/sample-app");
@@ -145,11 +145,12 @@ containerSuite("neo4j bolt writer", () => {
     "a full run prunes a module whose source vanished",
     async () => {
       const opts = optsFor();
-      const app = (await analyze(opts)).internal;
+      const result = await analyze(opts);
+      const app = result.internal;
       const victim = Object.keys(app.symbol_table).sort()[0];
       delete app.symbol_table[victim];
 
-      const rows = project(toV2(app, opts));
+      const rows = project(finalizeAnalysis(app, result.program_graphs ?? null, opts).application);
       await boltWriter(rows, cfg, log, true);
 
       // The victim's nodes are gone.
