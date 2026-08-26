@@ -1,6 +1,6 @@
 # Native v2 model — retire the v1 compute model and the emit-time transform
 
-- **Status:** accepted, not yet implemented
+- **Status:** implemented (branch `refactor/issue-096-native-v2-model`)
 - **Scope:** `codeanalyzer-typescript` only — no wire change, no SDK change, no sibling change
 - **Schema version:** 2.1.0, unchanged. This is an internal rewrite; `analysis.json` and the
   Neo4j projection stay semantically identical at every level.
@@ -38,7 +38,7 @@ in `src/utils/serialize.ts`); python has since retired its shim. This spec retir
 | Wire gate | **Deep-equal goldens** captured from pre-rewrite `main`, both fixtures, `-a 1..4` + `graph.cypher`; key order free, arrays order-sensitive |
 | Tracking | **One issue, one PR**; stages are commits, each green on the goldens |
 | Release | **1.1.0 at completion**; stages merge nothing individually; no SDK lockstep |
-| Terminal naming | `V2*` → `TS*` at teardown; `src/schema/v2/model.ts` folds into `src/schema/schema.ts` |
+| Terminal naming | `V2*` → `TS*` at teardown; `src/schema/v2/model.ts` folds into `src/schema/schema.ts`. As implemented: envelope `TSAnalysis`, root node `TSApplication` (python's `PyApplication` analog), internal working set `AnalysisInternal`, wire edges `TSCallGraphEdge`/`TSParamEdge` |
 | Goldens lifetime | Transition-scoped — harness and goldens deleted at teardown |
 | L3/L4 tree-attach | Moves to `src/dataflow/attach.ts` (python parity: its dataflow emits onto the tree, python 5600542) |
 
@@ -131,6 +131,11 @@ The existing standing gates — schema conformance, `L1 ⊆ L2 ⊆ L3 ⊆ L4` mo
 goldens are deleted at teardown.
 
 ## Stages (commits within the one PR; each green on goldens + full suite)
+
+*As implemented:* Stages 2 and 3 landed as one commit — the pass chain is order-coupled
+(the L2 passes join on `assignIds` output, the attach on both), so relocating it into the
+core spine piecemeal would have produced two incoherent halves. The goldens also cover a
+third fixture (`anon-app`) for the 2.1.0 synthesized-callable homing paths.
 
 1. **Stage 0 — harness.** Goldens captured from the branch base + the deep-equal test.
 2. **Stage 1 — L1 native.** Containers in `schema.ts` become v2-bucketed and span-only;
