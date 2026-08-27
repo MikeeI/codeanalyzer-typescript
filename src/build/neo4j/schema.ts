@@ -170,7 +170,7 @@ export const REL_TYPES: RelType[] = [
   { type: "TS_SUMMARY", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
   { type: "TS_PARAM_IN", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
   { type: "TS_PARAM_OUT", from: ["TSBodyNode"], to: ["TSBodyNode"], properties: { var: "string" } },
-  // Inheritance, projected from the `extends_ids`/`implements_ids` node props (schema/v2/emit.ts) —
+  // Inheritance, projected from the `extends_ids`/`implements_ids` node props (the heritage pass, schema/heritage.ts) —
   // resolved-only: an unresolved (external/library) supertype never reaches here. A `to` of `TSClass`
   // covers TS's `implements SomeClass` (structural, not just interfaces); an interface may itself
   // `extends` a class's instance type, hence `TS_EXTENDS` also allows a `TSInterface` source.

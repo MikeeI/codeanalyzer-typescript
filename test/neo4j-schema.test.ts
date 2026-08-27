@@ -19,7 +19,6 @@ import {
 } from "../src/build/neo4j";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import { toV2Detailed } from "../src/schema/v2";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/dataflow-app");
 
@@ -34,7 +33,7 @@ async function fixtureRows() {
     noBuild: true, phantoms: true, callGraphProvider: "union", cacheDir, verbosity: 0,
   };
   try {
-    return project(toV2Detailed(await analyze(opts), opts).application);
+    return project((await analyze(opts)).application);
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }

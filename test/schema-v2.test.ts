@@ -12,8 +12,8 @@ import * as path from "node:path";
 import pkg from "../package.json";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import type { GraphSelector, TSApplication } from "../src/schema";
-import { type V2Application, type V2Callable, type V2Module, type V2Type, toV2Detailed } from "../src/schema/v2";
+import { forEachCallable, forEachType, type GraphSelector } from "../src/schema";
+import type { AnalysisResult } from "../src/core";
 import { type GraphRows, project } from "../src/build/neo4j";
 import { tscProvider } from "../src/semantic_analysis";
 
@@ -44,7 +44,7 @@ function options(): AnalysisOptions {
   };
 }
 
-async function run(): Promise<TSApplication> {
+async function run(): Promise<AnalysisResult> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-test-"));
   try {
     return await analyze({ ...options(), cacheDir });
@@ -53,27 +53,28 @@ async function run(): Promise<TSApplication> {
   }
 }
 
-const v1 = await run();
-const { application: v2, idBySig, collisions } = toV2Detailed(v1, { ...options(), input: FIXTURE });
+const result = await run();
+const v1 = result.internal;
+const { application: v2, idBySig, collisions } = result;
 const root = v2.application;
 const st = root.symbol_table;
 
 /** Every id in the tree, in walk order, for uniqueness + well-formedness checks. */
 function allIds(): string[] {
   const out: string[] = [];
-  const walkCallable = (c: V2Callable): void => {
+  const walkCallable = (c: TSCallable): void => {
     out.push(c.id);
     for (const cc of Object.values(c.callables ?? {})) walkCallable(cc);
     for (const t of Object.values(c.types ?? {})) walkType(t);
   };
-  const walkType = (t: V2Type): void => {
+  const walkType = (t: TSType): void => {
     out.push(t.id);
     for (const c of Object.values(t.callables ?? {})) walkCallable(c);
     for (const f of Object.values(t.fields ?? {})) out.push(f.id);
     for (const st2 of Object.values(t.types ?? {})) walkType(st2);
     for (const fn of Object.values(t.functions ?? {})) walkCallable(fn);
   };
-  for (const m of Object.values(st) as V2Module[]) {
+  for (const m of Object.values(st) as TSModule[]) {
     out.push(m.id);
     for (const t of Object.values(m.types)) walkType(t);
     for (const c of Object.values(m.functions)) walkCallable(c);
@@ -121,7 +122,7 @@ describe("schema v2 — L1 identity", () => {
   });
 
   test("module ids derive from the file key", () => {
-    for (const [key, m] of Object.entries(st) as [string, V2Module][]) {
+    for (const [key, m] of Object.entries(st) as [string, TSModule][]) {
       expect(m.id).toBe(`can://typescript/sample-app/${key}`);
       expect(m.kind).toBe("module");
     }
@@ -130,7 +131,7 @@ describe("schema v2 — L1 identity", () => {
 
 describe("schema v2 — L1 source & spans (get_method_body)", () => {
   test("each module carries its full source", () => {
-    for (const m of Object.values(st) as V2Module[]) expect(typeof m.source).toBe("string");
+    for (const m of Object.values(st) as TSModule[]) expect(typeof m.source).toBe("string");
   });
 
   test("a callable's span.bytes slices its declaration out of module.source", () => {
@@ -159,7 +160,7 @@ describe("schema v2 — L1 tree shape", () => {
   });
 
   test("a callable's body holds L1 call nodes keyed by line:col with callee null", () => {
-    const create = st["src/services.ts"].types.UserService.callables?.create as V2Callable;
+    const create = st["src/services.ts"].types.UserService.callables?.create as TSCallable;
     const keys = Object.keys(create.body);
     expect(keys.length).toBeGreaterThan(0);
     for (const k of keys) expect(k).toMatch(/^\d+:\d+(\/\d+)?$/);
@@ -222,21 +223,15 @@ describe("schema v2 — inheritance resolves heritage signatures to can:// ids (
   });
 });
 
-describe("schema v2 — L1 superset", () => {
-  test("every v1 callable/type signature has a v2 id", () => {
-    const v1sigs = new Set<string>();
-    const addType = (t: { signature: string; methods?: Record<string, { signature: string }> }): void => {
-      v1sigs.add(t.signature);
-      for (const m of Object.values(t.methods ?? {})) v1sigs.add(m.signature);
-    };
+describe("schema v2 — L1 id registration", () => {
+  test("every tree callable/type signature has a v2 id", () => {
+    const sigs = new Set<string>();
     for (const m of Object.values(v1.symbol_table)) {
-      for (const t of Object.values(m.classes)) addType(t);
-      for (const t of Object.values(m.interfaces)) addType(t);
-      for (const t of Object.values(m.enums)) v1sigs.add(t.signature);
-      for (const t of Object.values(m.type_aliases)) v1sigs.add(t.signature);
-      for (const fn of Object.values(m.functions)) v1sigs.add(fn.signature);
+      forEachCallable(m, (c) => sigs.add(c.signature));
+      forEachType(m, (t) => sigs.add(t.signature));
     }
-    const missing = [...v1sigs].filter((s) => !idBySig.has(s));
+    expect(sigs.size).toBeGreaterThan(0);
+    const missing = [...sigs].filter((s) => !idBySig.has(s));
     expect(missing).toEqual([]);
   });
 });
@@ -251,7 +246,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
     const spy = spyOn(tscProvider, "build");
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l1-guard-"));
     try {
-      const v1L1 = await analyze({ ...options(), analysisLevel: 1, callGraphProvider: "tsc", cacheDir });
+      const v1L1 = (await analyze({ ...options(), analysisLevel: 1, callGraphProvider: "tsc", cacheDir })).internal;
       expect(spy).not.toHaveBeenCalled();
       expect(v1L1.call_graph).toEqual([]);
       expect(Object.keys(v1L1.external_symbols)).toEqual([]);
@@ -266,7 +261,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
     const spy = spyOn(tscProvider, "build");
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l1-guard-l2-"));
     try {
-      const v1L2guard = await analyze({ ...options(), analysisLevel: 2, callGraphProvider: "tsc", cacheDir });
+      const v1L2guard = (await analyze({ ...options(), analysisLevel: 2, callGraphProvider: "tsc", cacheDir })).internal;
       expect(spy).toHaveBeenCalledTimes(1);
       expect(v1L2guard.call_graph.length).toBeGreaterThan(0);
     } finally {
@@ -277,7 +272,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
 });
 
 // ---- L2: call graph -------------------------------------------------------------------------
-async function runL2(): Promise<TSApplication> {
+async function runL2(): Promise<AnalysisResult> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l2-"));
   try {
     return await analyze({ ...options(), analysisLevel: 2, cacheDir });
@@ -285,8 +280,7 @@ async function runL2(): Promise<TSApplication> {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
 }
-const v1L2 = await runL2();
-const { application: v2L2, idBySig: idsL2, dangling: danglingL2 } = toV2Detailed(v1L2, { ...options(), analysisLevel: 2, input: FIXTURE });
+const { application: v2L2, idBySig: idsL2, dangling: danglingL2 } = await runL2();
 const rootL2 = v2L2.application;
 const knownIds = new Set(idsL2.values());
 
@@ -309,7 +303,7 @@ describe("schema v2 — L2 call graph", () => {
 
   test("body call-node callees are backfilled to a known id (null → id refinement)", () => {
     let sawBackfill = false;
-    const scan = (c: V2Callable): void => {
+    const scan = (c: TSCallable): void => {
       for (const b of Object.values(c.body)) {
         if (b.kind === "call" && b.callee != null) {
           sawBackfill = true;
@@ -341,7 +335,7 @@ const DF_FIXTURE = path.resolve(import.meta.dir, "fixtures/dataflow-app");
 function dfOptions(level: 3 | 4): AnalysisOptions {
   return { ...options(), input: DF_FIXTURE, analysisLevel: level, graphs: level >= 4 ? ["cfg", "dfg", "pdg", "sdg"] : ["cfg", "dfg", "pdg"] };
 }
-async function runDF(level: 3 | 4): Promise<TSApplication> {
+async function runDF(level: 3 | 4): Promise<AnalysisResult> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), `cants-v2-l${level}-`));
   try {
     return await analyze({ ...dfOptions(level), cacheDir });
@@ -351,14 +345,14 @@ async function runDF(level: 3 | 4): Promise<TSApplication> {
 }
 
 /** Every callable node in the tree (module/type/namespace/nested recursion). */
-function allCallables(root: { symbol_table: Record<string, V2Module> }): V2Callable[] {
-  const out: V2Callable[] = [];
-  const wc = (c: V2Callable): void => {
+function allCallables(root: { symbol_table: Record<string, TSModule> }): TSCallable[] {
+  const out: TSCallable[] = [];
+  const wc = (c: TSCallable): void => {
     out.push(c);
     for (const cc of Object.values(c.callables ?? {})) wc(cc);
     for (const t of Object.values(c.types ?? {})) wt(t);
   };
-  const wt = (t: V2Type): void => {
+  const wt = (t: TSType): void => {
     for (const c of Object.values(t.callables ?? {})) wc(c);
     for (const st of Object.values(t.types ?? {})) wt(st);
     for (const fn of Object.values(t.functions ?? {})) wc(fn);
@@ -370,8 +364,8 @@ function allCallables(root: { symbol_table: Record<string, V2Module> }): V2Calla
   return out;
 }
 
-const dfL3 = toV2Detailed(await runDF(3), dfOptions(3)).application;
-const dfL4 = toV2Detailed(await runDF(4), dfOptions(4)).application;
+const dfL3 = (await runDF(3)).application;
+const dfL4 = (await runDF(4)).application;
 
 /** No intra-callable (bare-local) or cross-callable (canId@local) endpoint may dangle. */
 function danglingCount(app: typeof dfL3): number {
@@ -441,7 +435,7 @@ describe("schema v2 — L3 intraprocedural dataflow", () => {
 
   test("a sampled L3 statement node is source-sliceable (span.bytes reproduces its text)", () => {
     const mod = dfL3.application.symbol_table["src/flow.ts"];
-    const classify = mod.functions.classify as V2Callable;
+    const classify = mod.functions.classify as TSCallable;
     const stmt = classify.body["4:3"];
     expect(stmt?.kind).toBe("statement");
     const [s, e] = (stmt as { span: { bytes: [number, number] } }).span.bytes;
@@ -454,7 +448,7 @@ describe("schema v2 — L3 intraprocedural dataflow", () => {
     // nodes (which slice out just their own text), entry/exit should reproduce the callable's
     // entire declaration, including its `export` modifier.
     const mod = dfL3.application.symbol_table["src/flow.ts"];
-    const classify = mod.functions.classify as V2Callable;
+    const classify = mod.functions.classify as TSCallable;
     const entry = classify.body["@entry"];
     const exit = classify.body["@exit"];
     expect(entry?.kind).toBe("entry");
@@ -552,7 +546,7 @@ describe("schema v2 — L4 interprocedural SDG", () => {
 // ---- Real end-to-end monotonicity gate + Neo4j↔JSON count parity (issue #27) -------------------
 //
 // `analyze()` run fresh at each of `-a 1/2/3/4` on dataflow-app (four full runs — the fixture is
-// small), then the emitted V2Application at each level is reduced to three KEY-sets — symbol-table
+// small), then the emitted TSAnalysis at each level is reduced to three KEY-sets — symbol-table
 // ids, body-node keys, and edge keys (call_graph / cfg / cdg / ddg / summary / param_in / param_out)
 // — and every level's set must be a superset of the level below (canonical-schema.md's additive
 // invariant). Comparing KEYS (not values) means the one sanctioned value mutation, a `call` node's
@@ -566,25 +560,24 @@ function optsAt(level: 1 | 2 | 3 | 4): AnalysisOptions {
   return { ...options(), input: DF_FIXTURE, analysisLevel: level, graphs };
 }
 
-async function appAt(level: 1 | 2 | 3 | 4): Promise<V2Application> {
+async function appAt(level: 1 | 2 | 3 | 4): Promise<TSAnalysis> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-mono-"));
   try {
-    const v1run = await analyze({ ...optsAt(level), cacheDir });
-    return toV2Detailed(v1run, optsAt(level)).application;
+    return (await analyze({ ...optsAt(level), cacheDir })).application;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
 }
 
 /** Every symbol-table id — module/type/callable/field — recursing through nested scopes. */
-function symbolIds(app: V2Application): Set<string> {
+function symbolIds(app: TSAnalysis): Set<string> {
   const out = new Set<string>();
-  const walkCallable = (c: V2Callable): void => {
+  const walkCallable = (c: TSCallable): void => {
     out.add(c.id);
     for (const cc of Object.values(c.callables ?? {})) walkCallable(cc);
     for (const t of Object.values(c.types ?? {})) walkType(t);
   };
-  const walkType = (t: V2Type): void => {
+  const walkType = (t: TSType): void => {
     out.add(t.id);
     for (const c of Object.values(t.callables ?? {})) walkCallable(c);
     for (const f of Object.values(t.fields ?? {})) out.add(f.id);
@@ -601,13 +594,13 @@ function symbolIds(app: V2Application): Set<string> {
 }
 
 /** Every type node — classes/interfaces/enums/aliases/namespaces — recursing through nested scopes. */
-function allTypes(app: V2Application): V2Type[] {
-  const out: V2Type[] = [];
-  const walkCallable = (c: V2Callable): void => {
+function allTypes(app: TSAnalysis): TSType[] {
+  const out: TSType[] = [];
+  const walkCallable = (c: TSCallable): void => {
     for (const cc of Object.values(c.callables ?? {})) walkCallable(cc);
     for (const t of Object.values(c.types ?? {})) walkType(t);
   };
-  const walkType = (t: V2Type): void => {
+  const walkType = (t: TSType): void => {
     out.push(t);
     for (const c of Object.values(t.callables ?? {})) walkCallable(c);
     for (const nested of Object.values(t.types ?? {})) walkType(nested);
@@ -621,7 +614,7 @@ function allTypes(app: V2Application): V2Type[] {
 }
 
 /** Every body-node key, namespaced by its owning callable id so bare local keys never collide. */
-function bodyKeys(app: V2Application): Set<string> {
+function bodyKeys(app: TSAnalysis): Set<string> {
   const out = new Set<string>();
   for (const c of allCallables(app.application)) {
     for (const k of Object.keys(c.body)) out.add(`${c.id}::${k}`);
@@ -630,7 +623,7 @@ function bodyKeys(app: V2Application): Set<string> {
 }
 
 /** Every edge key: call_graph + param_in/param_out (app scope), cfg/cdg/ddg/summary (per callable). */
-function edgeKeys(app: V2Application): Set<string> {
+function edgeKeys(app: TSAnalysis): Set<string> {
   const out = new Set<string>();
   const root = app.application;
   for (const e of root.call_graph) out.add(`call_graph::${e.src}>${e.dst}:${[...e.prov].sort().join(",")}`);
@@ -656,7 +649,7 @@ const monoApp1 = await appAt(1);
 const monoApp2 = await appAt(2);
 const monoApp3 = await appAt(3);
 const monoApp4 = await appAt(4);
-const monoPairs: Array<[V2Application, V2Application, string]> = [
+const monoPairs: Array<[TSAnalysis, TSAnalysis, string]> = [
   [monoApp1, monoApp2, "L1 -> L2"],
   [monoApp2, monoApp3, "L2 -> L3"],
   [monoApp3, monoApp4, "L3 -> L4"],
@@ -701,7 +694,7 @@ function relCount(rows: GraphRows, type: string): number {
 }
 
 /** Every id materialized as a `:CanNode` row: symbol-table ids + body-node fq ids + external/synth. */
-function canNodeIds(app: V2Application): Set<string> {
+function canNodeIds(app: TSAnalysis): Set<string> {
   const ids = new Set(symbolIds(app));
   for (const c of allCallables(app.application)) {
     for (const k of Object.keys(c.body)) ids.add(k.startsWith("@") ? `${c.id}${k}` : `${c.id}@${k}`);
@@ -712,7 +705,7 @@ function canNodeIds(app: V2Application): Set<string> {
 }
 
 /** Every `call` body node whose `callee` resolved to an id — the JSON-side source of RESOLVES_TO. */
-function resolvesToCount(app: V2Application): number {
+function resolvesToCount(app: TSAnalysis): number {
   let n = 0;
   for (const c of allCallables(app.application)) {
     for (const bn of Object.values(c.body)) if (typeof bn.callee === "string") n++;

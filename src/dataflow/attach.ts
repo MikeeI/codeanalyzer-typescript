@@ -1,6 +1,8 @@
 /**
- * L3/L4 dataflow → the v2 tree. Transforms the v1 `program_graphs` (CFG / PDG[=CDG+DDG] / SDG,
- * keyed by (signature, integer node_id)) into the additive-CPG placement:
+ * L3/L4 dataflow → the v2 tree (the ATTACH step): the stage that computes the program graphs also
+ * writes them onto the tree (python parity). Transforms the internal `program_graphs` compute IR
+ * (CFG / PDG[=CDG+DDG] / SDG, keyed by (signature, integer node_id)) into the additive-CPG
+ * placement:
  *
  *   L3 (-a 3): grow each callable's `body{}` with statement nodes (+ `@entry`/`@exit`), and hang
  *              the intra-callable edge lists `cfg`/`cdg`/`ddg` (bare local ids) on the callable.
@@ -10,18 +12,17 @@
  *
  * A pure relabel of what the analyzer already computed — no re-analysis. See
  * .claude/SCHEMA_DECISIONS.md § "Schema v2 migration" and dataflow-graphs.md.
- * Node-kind mapping (grounded in the v1 model):
+ * Node-kind mapping (grounded in the compute IR, schema/graphs.ts):
  *   entry→'@entry', exit→'@exit' (also '@formal_out' as a PARAM_OUT/formal-out anchor),
  *   param→contracted out of the L3 CFG; '@formal_in:N' at L4, statement→'line:col'.
  */
 
-import type { CfgEdge, GraphNode, PdgEdge, ProgramGraphs } from "../graphs";
-import type { TSApplication } from "../schema";
-import type { V2Callable, V2ParamEdge, V2Root } from "./model";
+import type { CfgEdge, GraphNode, PdgEdge, ProgramGraphs } from "../schema/graphs";
+import type { TSApplication, TSCallable, TSParamEdge } from "../schema";
 
 interface LocalIds {
   canId: string;
-  callable: V2Callable;
+  callable: TSCallable;
   stmtLocal: Map<number, string>; // entry/exit/statement node id → body local id
   paramN: Map<number, number>; // param node id → declaration index N
   paramName: Map<number, string>; // param node id → the `of` name
@@ -29,7 +30,7 @@ interface LocalIds {
 }
 
 /** Build the per-callable node_id→local-id maps (single source-of-truth for every edge rewrite). */
-function buildLocalIds(canId: string, callable: V2Callable, nodes: GraphNode[]): LocalIds {
+function buildLocalIds(canId: string, callable: TSCallable, nodes: GraphNode[]): LocalIds {
   const stmtLocal = new Map<number, string>();
   const paramN = new Map<number, number>();
   const paramName = new Map<number, string>();
@@ -130,7 +131,7 @@ function emitL3(li: LocalIds, nodes: GraphNode[], cfgEdges: CfgEdge[] | undefine
 // L4 — synthetic vertices + summary (callable) + param_in/param_out (application)
 // ----------------------------------------------------------------------------------------------
 
-function emitL4(root: V2Root, pg: ProgramGraphs, info: Map<string, LocalIds>): void {
+function emitL4(root: TSApplication, pg: ProgramGraphs, info: Map<string, LocalIds>): void {
   // Formal vertices + the deferred formal-out-routing ddg edges, per callable.
   for (const [sig, fg] of Object.entries(pg.functions)) {
     const li = info.get(sig);
@@ -226,14 +227,13 @@ function emitL4(root: V2Root, pg: ProgramGraphs, info: Map<string, LocalIds>): v
  * `callableBySig` locates each callable's v2 node (populated during the L1 walk).
  */
 export function applyDataflow(
-  root: V2Root,
-  app: TSApplication,
+  root: TSApplication,
+  pg: ProgramGraphs,
   idBySig: Map<string, string>,
-  callableBySig: Map<string, V2Callable>,
+  callableBySig: Map<string, TSCallable>,
   level: number,
 ): void {
-  const pg = app.program_graphs;
-  if (!pg || level < 3) return;
+  if (level < 3) return;
 
   const info = new Map<string, LocalIds>();
   for (const [sig, fg] of Object.entries(pg.functions)) {
@@ -277,6 +277,6 @@ function cmp3(a: { src: string; dst: string; kind: string }, b: { src: string; d
 function cmpDdg(a: { src: string; dst: string; var?: string }, b: { src: string; dst: string; var?: string }): number {
   return cmp2(a, b) || (a.var ?? "").localeCompare(b.var ?? "");
 }
-function cmpEdgeVar(a: V2ParamEdge, b: V2ParamEdge): number {
+function cmpEdgeVar(a: TSParamEdge, b: TSParamEdge): number {
   return a.src.localeCompare(b.src) || a.dst.localeCompare(b.dst) || (a.var ?? "").localeCompare(b.var ?? "");
 }

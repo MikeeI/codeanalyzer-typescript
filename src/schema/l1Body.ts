@@ -1,0 +1,65 @@
+/**
+ * L1 body population — python's `l1_body.py`: materialize each callable's `body{}` `call` nodes
+ * from the INTERNAL `call_sites`, `callee: null` (the sanctioned null→id refinement happens at
+ * L2, l2Callees.ts).
+ *
+ * Rebuilds `body{}` WHOLESALE every run and deletes the derived edge lists — body, cfg/cdg/ddg/
+ * summary, and callee resolution are per-run projections (they embed per-run ids and per-level
+ * depth), while `call_sites` are the cached source of truth. That wholesale rebuild is what makes
+ * the whole pass chain idempotent across repeated emissions at different levels.
+ */
+
+import type { AnalysisInternal, TSBodyNode, TSCallable, TSCallsite, TSModule } from "./schema";
+import { forEachCallable } from "./schema";
+
+/**
+ * The body key of each call site, in recording order: `line:col`, disambiguated `/2`, `/3`, …
+ * when chained calls share a start position. The SINGLE definition of the key sequence — l1Body
+ * builds with it and l2Callees re-derives the same pairing from it.
+ */
+export function* callBodyKeys(sites: TSCallsite[]): Generator<[string, TSCallsite]> {
+  const used = new Set<string>();
+  for (const cs of sites) {
+    const base = `${cs.start_line}:${cs.start_column}`;
+    let key = base;
+    for (let k = 2; used.has(key); k++) key = `${base}/${k}`;
+    used.add(key);
+    yield [key, cs];
+  }
+}
+
+function callNodeOf(cs: TSCallsite): TSBodyNode {
+  return {
+    kind: "call",
+    span: {
+      start: [cs.start_line, cs.start_column],
+      end: [cs.end_line, cs.end_column],
+      bytes: cs.bytes ?? [0, 0],
+    },
+    callee: null,
+    method_name: cs.method_name,
+    ...(cs.receiver_expr != null ? { receiver_expr: cs.receiver_expr } : {}),
+    ...(cs.receiver_type != null ? { receiver_type: cs.receiver_type } : {}),
+    argument_types: cs.argument_types,
+    type_arguments: cs.type_arguments,
+    ...(cs.return_type != null ? { return_type: cs.return_type } : {}),
+    is_constructor_call: cs.is_constructor_call,
+    is_optional_chain: cs.is_optional_chain,
+  };
+}
+
+function resetCallable(c: TSCallable): void {
+  const body: Record<string, TSBodyNode> = {};
+  for (const [key, cs] of callBodyKeys(c.call_sites)) body[key] = callNodeOf(cs);
+  c.body = body;
+  delete c.cfg;
+  delete c.cdg;
+  delete c.ddg;
+  delete c.summary;
+}
+
+export function populateL1Body(app: AnalysisInternal): void {
+  for (const mod of Object.values(app.symbol_table) as TSModule[]) {
+    forEachCallable(mod, resetCallable);
+  }
+}

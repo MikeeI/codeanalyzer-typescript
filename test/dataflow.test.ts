@@ -41,6 +41,7 @@ function options(level: 1 | 2 | 3, cacheDir: string, jobs: number): AnalysisOpti
 }
 
 async function run(level: 1 | 2 | 3, jobs = 1): Promise<Awaited<ReturnType<typeof analyze>>> {
+  // returns the full AnalysisResult — the program-graph IR rides on it, not on the tree
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-dataflow-test-"));
   try {
     return await analyze(options(level, cacheDir, jobs));
@@ -49,8 +50,7 @@ async function run(level: 1 | 2 | 3, jobs = 1): Promise<Awaited<ReturnType<typeo
   }
 }
 
-const app = await run(3);
-const pg = app.program_graphs as ProgramGraphs;
+const pg = (await run(3)).program_graphs as ProgramGraphs;
 
 const cfgOf = (sig: string): FunctionCfg => {
   const g = pg.functions[sig]?.cfg;
@@ -380,7 +380,7 @@ describe("determinism and gating", () => {
   test("-a 1 emits no program_graphs section", async () => {
     const level1 = await run(1);
     expect(level1.program_graphs).toBeUndefined();
-    expect(JSON.stringify(level1)).not.toContain("program_graphs");
+    expect(JSON.stringify(level1.application)).not.toContain("program_graphs");
   });
 
   test("schema_version and k_limit are stamped", () => {

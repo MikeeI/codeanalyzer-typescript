@@ -1,33 +1,35 @@
 /**
- * Per-file builders: turn a ts-morph SourceFile into a canonical TSModule. Mirrors the role of
- * Python's `build_pymodule_from_file`. ts-morph nodes are accessed via dynamic getters (cast to
- * `any`) for brevity and resilience across node kinds; the *returned* objects are strictly typed
- * to the schema, which is what the output contract cares about.
+ * Per-file builders: turn a ts-morph SourceFile into a canonical TSModule — NATIVELY in the
+ * schema-v2 shape (types{}/functions{}/fields{} buckets, member-keyed maps, span-only containers,
+ * omit-instead-of-null leaves). Mirrors the role of python's module builder. ts-morph nodes are
+ * accessed via dynamic getters (cast to `any`) for brevity and resilience across node kinds; the
+ * *returned* objects are strictly typed to the schema, which is what the output contract cares
+ * about.
+ *
+ * Builders do NOT stamp `can://` ids (ids embed the per-invocation app name; the cached tree must
+ * stay app-name-free — assignIds.ts stamps them per run) and do NOT build `body{}` (the l1Body
+ * pass derives it per run from the INTERNAL `call_sites`).
  */
 import { Node, SyntaxKind } from "ts-morph";
 import {
   type TSCallable,
   type TSCallableKind,
   type TSCallsite,
-  type TSClass,
-  type TSClassAttribute,
   type TSComment,
   type TSDecorator,
-  type TSEnum,
   type TSExport,
+  type TSField,
   type TSImport,
-  type TSInterface,
   type TSModule,
-  type TSNamespace,
   type TSOverloadSignature,
   type TSSpan,
-  type TSTypeAlias,
+  type TSType,
   type TSTypeParameter,
-  type TSVariableDeclaration,
   constructorSignatureOf,
   fileKeyOf,
 } from "../schema";
 import { computeSignatureForDecl } from "../schema";
+import { memberKey } from "../schema/ids";
 
 // ----------------------------------------------------------------------------------------------
 // dynamic-getter helpers
@@ -49,22 +51,22 @@ function isRedundantOverload(node: Node): boolean {
   return typeof n.getImplementation === "function" ? n.getImplementation() !== undefined : false;
 }
 
-function clamp(s: string | undefined | null, max = 400): string | null {
-  if (s == null) return null;
+function clamp(s: string | undefined | null, max = 400): string | undefined {
+  if (s == null) return undefined;
   return s.length > max ? s.slice(0, max) : s;
 }
 
-function inferredType(valueNode: Node): string | null {
+function inferredType(valueNode: Node): string | undefined {
   try {
     const t = (valueNode as unknown as { getType?: () => { getText: (n?: Node) => string } }).getType?.();
-    if (!t) return null;
+    if (!t) return undefined;
     return clamp(t.getText(valueNode));
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-function returnTypeText(fnNode: Node): string | null {
+function returnTypeText(fnNode: Node): string | undefined {
   const n = fnNode as unknown as {
     getReturnTypeNode?: () => { getText: () => string } | undefined;
     getReturnType?: () => { getText: (n?: Node) => string };
@@ -77,7 +79,7 @@ function returnTypeText(fnNode: Node): string | null {
   } catch {
     /* unresolved */
   }
-  return null;
+  return undefined;
 }
 
 function span(node: Node): { start_line: number; end_line: number; start_column: number; end_column: number } {
@@ -90,7 +92,7 @@ function span(node: Node): { start_line: number; end_line: number; start_column:
 /**
  * schema-v2 precise span: [line, column] endpoints + char offsets into the module source.
  * `bytes = [getStart(), getEnd()]` are exactly the offsets `Node.getText()` slices, so
- * `module.source.slice(bytes[0], bytes[1])` reproduces the node's text (the old `code` field).
+ * `module.source.slice(bytes[0], bytes[1])` reproduces the node's text.
  */
 function richSpan(node: Node): TSSpan {
   const sf = node.getSourceFile();
@@ -101,15 +103,7 @@ function richSpan(node: Node): TSSpan {
   return { start: [sl.line, sl.column], end: [el.line, el.column], bytes: [s, e] };
 }
 
-function declLines(node: Node): { start_line: number; end_line: number; code_start_line: number } {
-  return {
-    start_line: node.getStartLineNumber(true),
-    end_line: node.getEndLineNumber(),
-    code_start_line: node.getStartLineNumber(false),
-  };
-}
-
-function accessibilityOf(node: Node): string | null {
+function accessibilityOf(node: Node): string | undefined {
   const mods = (node as unknown as { getModifiers?: () => Node[] }).getModifiers?.() ?? [];
   for (const m of mods) {
     const k = m.getKind();
@@ -117,7 +111,7 @@ function accessibilityOf(node: Node): string | null {
     if (k === SyntaxKind.ProtectedKeyword) return "protected";
     if (k === SyntaxKind.PublicKeyword) return "public";
   }
-  return null;
+  return undefined;
 }
 
 function isExportedDecl(node: Node): boolean {
@@ -180,9 +174,10 @@ function decoratorsOf(node: Node): TSDecorator[] {
         }
       }
     }
+    const qualified = dec.getFullName();
     return {
       name: dec.getName(),
-      qualified_name: dec.getFullName() ?? null,
+      ...(qualified != null ? { qualified_name: qualified } : {}),
       positional_arguments: positional,
       keyword_arguments: keyword,
       ...span(d),
@@ -199,10 +194,12 @@ function typeParamsOf(node: Node): TSTypeParameter[] {
       getConstraint?: () => { getText: () => string } | undefined;
       getDefault?: () => { getText: () => string } | undefined;
     };
+    const constraint = t.getConstraint?.()?.getText();
+    const dflt = t.getDefault?.()?.getText();
     return {
       name: t.getName(),
-      constraint: t.getConstraint?.()?.getText() ?? null,
-      default: t.getDefault?.()?.getText() ?? null,
+      ...(constraint != null ? { constraint } : {}),
+      ...(dflt != null ? { default: dflt } : {}),
     };
   });
 }
@@ -217,20 +214,24 @@ function buildParam(param: Node): import("../schema").TSCallableParameter {
     getTypeNode?: () => { getText: () => string } | undefined;
     getInitializer?: () => { getText: () => string } | undefined;
   };
+  const type = p.getTypeNode?.()?.getText() ?? inferredType(param);
+  const dflt = p.getInitializer?.()?.getText();
+  const accessibility = accessibilityOf(param);
   return {
     name: p.getName(),
-    type: p.getTypeNode?.()?.getText() ?? inferredType(param),
-    default_value: p.getInitializer?.()?.getText() ?? null,
+    ...(type != null ? { type } : {}),
+    ...(dflt != null ? { default_value: dflt } : {}),
     is_optional: boolOf(param, "isOptional"),
     is_rest: boolOf(param, "isRestParameter"),
     is_readonly: boolOf(param, "isReadonly"),
-    accessibility: accessibilityOf(param),
+    ...(accessibility != null ? { accessibility } : {}),
     decorators: decoratorsOf(param),
     ...span(param),
   };
 }
 
-function buildVariable(vd: Node, scope: TSVariableDeclaration["scope"]): TSVariableDeclaration {
+/** A module/namespace `const`/`let`/`var` binding as a `field` node. */
+function buildVariableField(vd: Node, scope: "module" | "namespace"): TSField {
   const v = vd as unknown as {
     getName: () => string;
     getTypeNode?: () => { getText: () => string } | undefined;
@@ -239,7 +240,7 @@ function buildVariable(vd: Node, scope: TSVariableDeclaration["scope"]): TSVaria
   };
   const vs = v.getVariableStatement?.();
   const kindRaw = String(vs?.getDeclarationKind?.() ?? "");
-  const declaration_kind: TSVariableDeclaration["declaration_kind"] = kindRaw.includes("const")
+  const declaration_kind: TSField["declaration_kind"] = kindRaw.includes("const")
     ? "const"
     : kindRaw.includes("let")
       ? "let"
@@ -248,40 +249,46 @@ function buildVariable(vd: Node, scope: TSVariableDeclaration["scope"]): TSVaria
         : kindRaw.includes("using")
           ? "using"
           : "unknown";
+  const type = v.getTypeNode?.()?.getText() ?? inferredType(vd);
+  const initializer = v.getInitializer?.()?.getText();
   return {
+    id: "",
+    kind: "field",
+    span: richSpan(vd),
     name: v.getName(),
-    type: v.getTypeNode?.()?.getText() ?? inferredType(vd),
-    initializer: v.getInitializer?.()?.getText() ?? null,
-    value: null,
+    ...(type != null ? { type } : {}),
+    ...(initializer != null ? { initializer } : {}),
     scope,
     declaration_kind,
     is_readonly: declaration_kind === "const",
     is_exported: vs?.isExported?.() ?? false,
-    ...span(vd),
-    span: richSpan(vd),
   };
 }
 
-function buildAttribute(prop: Node): TSClassAttribute {
+/** A class property / interface property as a `field` node. */
+function buildAttributeField(prop: Node): TSField {
   const p = prop as unknown as {
     getName: () => string;
     getTypeNode?: () => { getText: () => string } | undefined;
     getInitializer?: () => { getText: () => string } | undefined;
   };
+  const type = p.getTypeNode?.()?.getText() ?? inferredType(prop);
+  const initializer = p.getInitializer?.()?.getText();
+  const accessibility = accessibilityOf(prop);
   return {
+    id: "",
+    kind: "field",
     span: richSpan(prop),
     name: p.getName(),
-    type: p.getTypeNode?.()?.getText() ?? inferredType(prop),
+    ...(type != null ? { type } : {}),
     comments: jsDocsOf(prop),
     decorators: decoratorsOf(prop),
-    initializer: p.getInitializer?.()?.getText() ?? null,
-    accessibility: accessibilityOf(prop),
+    ...(initializer != null ? { initializer } : {}),
+    ...(accessibility != null ? { accessibility } : {}),
     is_static: boolOf(prop, "isStatic"),
     is_readonly: boolOf(prop, "isReadonly"),
     is_optional: boolOf(prop, "hasQuestionToken"),
     is_abstract: boolOf(prop, "isAbstract"),
-    start_line: prop.getStartLineNumber(true),
-    end_line: prop.getEndLineNumber(),
   };
 }
 
@@ -289,8 +296,8 @@ function buildCallsite(call: Node): TSCallsite {
   const isNew = Node.isNewExpression(call);
   const expr = (call as unknown as { getExpression: () => Node }).getExpression();
   let method_name = expr.getText();
-  let receiver_expr: string | null = null;
-  let receiver_type: string | null = null;
+  let receiver_expr: string | undefined;
+  let receiver_type: string | undefined;
   let is_optional_chain = false;
   if (Node.isPropertyAccessExpression(expr)) {
     method_name = expr.getName();
@@ -302,14 +309,14 @@ function buildCallsite(call: Node): TSCallsite {
   const argument_types = args.map((a) => inferredType(a) ?? "unknown");
   const typeArgs = (call as unknown as { getTypeArguments?: () => Node[] }).getTypeArguments?.() ?? [];
   const type_arguments = typeArgs.map((t) => t.getText());
+  const return_type = inferredType(call);
   return {
     method_name,
-    receiver_expr,
-    receiver_type,
+    ...(receiver_expr != null ? { receiver_expr } : {}),
+    ...(receiver_type != null ? { receiver_type } : {}),
     argument_types,
     type_arguments,
-    return_type: inferredType(call),
-    callee_signature: null,
+    ...(return_type != null ? { return_type } : {}),
     is_constructor_call: isNew,
     is_optional_chain,
     ...span(call),
@@ -339,7 +346,6 @@ function namedBoundary(node: Node): Boundary {
 
 interface BodyHandlers {
   onCall: (n: Node) => void;
-  onLocal: (vd: Node) => void;
   onNestedCallable: (n: Node) => void;
   onNestedClass: (n: Node) => void;
 }
@@ -357,7 +363,6 @@ function walkBody(body: Node, h: BodyHandlers): void {
     }
     if (b === "skip") return;
     if (Node.isCallExpression(node) || Node.isNewExpression(node)) h.onCall(node);
-    if (Node.isVariableDeclaration(node)) h.onLocal(node);
     node.forEachChild(visit);
   };
   // A concise arrow body can *be* a callable (`() => () => x`). Visiting only the body's children
@@ -409,13 +414,16 @@ function computeCC(body: Node): number {
 function overloadsOf(fnNode: Node): TSOverloadSignature[] {
   const ovs = (fnNode as unknown as { getOverloads?: () => Node[] }).getOverloads?.();
   if (!ovs || !ovs.length) return [];
-  return ovs.map((o) => ({
-    parameters: ((o as unknown as { getParameters?: () => Node[] }).getParameters?.() ?? []).map(buildParam),
-    return_type: returnTypeText(o),
-    type_parameters: typeParamsOf(o),
-    start_line: o.getStartLineNumber(true),
-    end_line: o.getEndLineNumber(),
-  }));
+  return ovs.map((o) => {
+    const return_type = returnTypeText(o);
+    return {
+      parameters: ((o as unknown as { getParameters?: () => Node[] }).getParameters?.() ?? []).map(buildParam),
+      ...(return_type != null ? { return_type } : {}),
+      type_parameters: typeParamsOf(o),
+      start_line: o.getStartLineNumber(true),
+      end_line: o.getEndLineNumber(),
+    };
+  });
 }
 
 /**
@@ -446,22 +454,20 @@ export function buildCallable(
   if (!sig) return null;
 
   const call_sites: TSCallsite[] = [];
-  const local_variables: TSVariableDeclaration[] = [];
-  const inner_callables: Record<string, TSCallable> = {};
-  const inner_classes: Record<string, TSClass> = {};
+  const callables: Record<string, TSCallable> = {};
+  const types: Record<string, TSType> = {};
 
   const body = (fnNode as unknown as { getBody?: () => Node | undefined }).getBody?.();
   if (body) {
     walkBody(body, {
       onCall: (n) => call_sites.push(buildCallsite(n)),
-      onLocal: (vd) => local_variables.push(buildVariable(vd, "function")),
       onNestedCallable: (n) => {
         const r = buildNestedCallable(n, root);
-        if (r) inner_callables[r.sig] = r.callable;
+        if (r) callables[memberKey(r.sig, r.callable.accessor_kind)] = r.callable;
       },
       onNestedClass: (n) => {
         const r = buildClass(n, root);
-        inner_classes[r.sig] = r.cls;
+        types[memberKey(r.sig)] = r.cls;
       },
     });
   }
@@ -469,26 +475,23 @@ export function buildCallable(
   const nameNode = sigNode as unknown as { getName?: () => string | undefined };
   const name =
     Node.isConstructorDeclaration(fnNode) ? "constructor" : (nameNode.getName?.() ?? "(anonymous)");
+  const return_type = kind === "constructor" || kind === "setter" ? undefined : returnTypeText(fnNode);
+  const accessibility = accessibilityOf(fnNode);
+  const accessor_kind = kind === "getter" ? "getter" : kind === "setter" ? "setter" : undefined;
 
   const callable: TSCallable = {
+    id: "",
+    kind,
     span: richSpan(sigNode),
     name,
-    path: sigNode.getSourceFile().getFilePath(),
     signature: sig,
     comments: jsDocsOf(sigNode),
     decorators: decoratorsOf(fnNode),
     parameters: ((fnNode as unknown as { getParameters?: () => Node[] }).getParameters?.() ?? []).map(buildParam),
     type_parameters: typeParamsOf(fnNode),
-    return_type: kind === "constructor" || kind === "setter" ? null : returnTypeText(fnNode),
-    code: clamp(sigNode.getText(), 20000),
-    ...declLines(sigNode),
-    call_sites,
-    inner_callables,
-    inner_classes,
-    local_variables,
+    ...(return_type != null ? { return_type } : {}),
     cyclomatic_complexity: body ? computeCC(body) : 0,
-    kind,
-    accessibility: accessibilityOf(fnNode),
+    ...(accessibility != null ? { accessibility } : {}),
     is_static: boolOf(fnNode, "isStatic"),
     is_abstract: boolOf(fnNode, "isAbstract"),
     is_async: boolOf(fnNode, "isAsync"),
@@ -498,9 +501,14 @@ export function buildCallable(
     is_exported: isExportedDecl(sigNode),
     is_ambient: isAmbientDecl(sigNode),
     is_implicit: false,
-    accessor_kind: kind === "getter" ? "getter" : kind === "setter" ? "setter" : null,
+    ...(accessor_kind != null ? { accessor_kind } : {}),
     overload_signatures: overloadsOf(fnNode),
+    body: {},
+    abs_path: sigNode.getSourceFile().getFilePath(),
+    call_sites,
   };
+  if (Object.keys(callables).length) callable.callables = callables;
+  if (Object.keys(types).length) callable.types = types;
   return { sig, callable };
 }
 
@@ -509,26 +517,16 @@ function implicitConstructor(classSig: string, filePath: string): { sig: string;
   return {
     sig,
     callable: {
+      id: "",
+      kind: "constructor",
       span: { start: [0, 0], end: [0, 0], bytes: [0, 0] }, // synthetic: no source
       name: "constructor",
-      path: filePath,
       signature: sig,
       comments: [],
       decorators: [],
       parameters: [],
       type_parameters: [],
-      return_type: null,
-      code: null,
-      start_line: -1,
-      end_line: -1,
-      code_start_line: -1,
-      call_sites: [],
-      inner_callables: {},
-      inner_classes: {},
-      local_variables: [],
       cyclomatic_complexity: 0,
-      kind: "constructor",
-      accessibility: null,
       is_static: false,
       is_abstract: false,
       is_async: false,
@@ -538,8 +536,10 @@ function implicitConstructor(classSig: string, filePath: string): { sig: string;
       is_exported: false,
       is_ambient: false,
       is_implicit: true,
-      accessor_kind: null,
       overload_signatures: [],
+      body: {},
+      abs_path: filePath,
+      call_sites: [],
     },
   };
 }
@@ -577,7 +577,7 @@ function resolveHeritage(expr: Node, root: string): string {
 // type-kind builders
 // ----------------------------------------------------------------------------------------------
 
-export function buildClass(cls: Node, root: string): { sig: string; cls: TSClass } {
+export function buildClass(cls: Node, root: string): { sig: string; cls: TSType } {
   const sig = computeSignatureForDecl(cls, root) ?? `${fileKeyOf(cls.getSourceFile().getFilePath(), root).modulePrefix}.(anonymous)`;
   const filePath = cls.getSourceFile().getFilePath();
   const c = cls as unknown as {
@@ -591,55 +591,55 @@ export function buildClass(cls: Node, root: string): { sig: string; cls: TSClass
     getImplements?: () => Node[];
   };
 
-  const methods: Record<string, TSCallable> = {};
+  const callables: Record<string, TSCallable> = {};
   for (const m of c.getMethods()) {
     if (isRedundantOverload(m)) continue;
     const r = buildCallable(m, m, "method", root);
-    if (r) methods[r.sig] = r.callable;
+    if (r) callables[memberKey(r.sig)] = r.callable;
   }
   const ctors = c.getConstructors();
   if (ctors.length === 0) {
     const imp = implicitConstructor(sig, filePath);
-    methods[imp.sig] = imp.callable;
+    callables[memberKey(imp.sig)] = imp.callable;
   } else {
     for (const ctor of ctors) {
       if (isRedundantOverload(ctor)) continue;
       const r = buildCallable(ctor, ctor, "constructor", root);
-      if (r) methods[r.sig] = r.callable;
+      if (r) callables[memberKey(r.sig)] = r.callable;
     }
   }
   for (const g of c.getGetAccessors()) {
     const r = buildCallable(g, g, "getter", root);
-    if (r) methods[`${r.sig}#get`] = r.callable;
+    if (r) callables[memberKey(r.sig, "getter")] = r.callable;
   }
   for (const s of c.getSetAccessors()) {
     const r = buildCallable(s, s, "setter", root);
-    if (r) methods[`${r.sig}#set`] = r.callable;
+    if (r) callables[memberKey(r.sig, "setter")] = r.callable;
   }
 
-  const attributes: Record<string, TSClassAttribute> = {};
+  const fields: Record<string, TSField> = {};
   for (const p of c.getProperties()) {
-    attributes[(p as unknown as { getName: () => string }).getName()] = buildAttribute(p);
+    fields[(p as unknown as { getName: () => string }).getName()] = buildAttributeField(p);
   }
-  // parameter properties (constructor(private x: T)) are class fields too
+  // parameter properties (constructor(private x: T)) are class fields too — spanless on the wire.
   for (const ctor of ctors) {
     for (const p of (ctor as unknown as { getParameters: () => Node[] }).getParameters()) {
       const acc = accessibilityOf(p);
       if (acc || boolOf(p, "isReadonly")) {
         const pn = p as unknown as { getName: () => string; getTypeNode?: () => { getText: () => string } | undefined };
-        attributes[pn.getName()] = {
+        const type = pn.getTypeNode?.()?.getText() ?? inferredType(p);
+        fields[pn.getName()] = {
+          id: "",
+          kind: "field",
           name: pn.getName(),
-          type: pn.getTypeNode?.()?.getText() ?? inferredType(p),
+          ...(type != null ? { type } : {}),
           comments: [],
           decorators: decoratorsOf(p),
-          initializer: null,
-          accessibility: acc,
+          ...(acc != null ? { accessibility: acc } : {}),
           is_static: false,
           is_readonly: boolOf(p, "isReadonly"),
           is_optional: boolOf(p, "isOptional"),
           is_abstract: false,
-          start_line: p.getStartLineNumber(true),
-          end_line: p.getEndLineNumber(),
         };
       }
     }
@@ -658,28 +658,26 @@ export function buildClass(cls: Node, root: string): { sig: string; cls: TSClass
   return {
     sig,
     cls: {
+      id: "",
+      kind: "class",
       span: richSpan(cls),
       name: c.getName?.() ?? "(anonymous)",
       signature: sig,
       comments: jsDocsOf(cls),
-      code: clamp(cls.getText(), 20000),
       decorators: decoratorsOf(cls),
       base_classes,
       implements_types,
       type_parameters: typeParamsOf(cls),
-      methods,
-      attributes,
-      inner_classes: {},
+      callables,
+      fields,
       is_abstract: boolOf(cls, "isAbstract"),
       is_exported: isExportedDecl(cls),
       is_ambient: isAmbientDecl(cls),
-      start_line: cls.getStartLineNumber(true),
-      end_line: cls.getEndLineNumber(),
     },
   };
 }
 
-export function buildInterface(intf: Node, root: string): { sig: string; intf: TSInterface } {
+export function buildInterface(intf: Node, root: string): { sig: string; intf: TSType } {
   const sig = computeSignatureForDecl(intf, root) ?? `${fileKeyOf(intf.getSourceFile().getFilePath(), root).modulePrefix}.(anonymous)`;
   const i = intf as unknown as {
     getName: () => string;
@@ -690,14 +688,14 @@ export function buildInterface(intf: Node, root: string): { sig: string; intf: T
     getConstructSignatures?: () => Node[];
     getIndexSignatures?: () => Node[];
   };
-  const methods: Record<string, TSCallable> = {};
+  const callables: Record<string, TSCallable> = {};
   for (const m of i.getMethods()) {
     const r = buildCallable(m, m, "method", root);
-    if (r) methods[r.sig] = r.callable;
+    if (r) callables[memberKey(r.sig)] = r.callable;
   }
-  const properties: Record<string, TSClassAttribute> = {};
+  const fields: Record<string, TSField> = {};
   for (const p of i.getProperties()) {
-    properties[(p as unknown as { getName: () => string }).getName()] = buildAttribute(p);
+    fields[(p as unknown as { getName: () => string }).getName()] = buildAttributeField(p);
   }
   const base_classes = (i.getExtends?.() ?? []).map((e) => resolveHeritage(e, root));
   const call_signatures = [
@@ -708,78 +706,77 @@ export function buildInterface(intf: Node, root: string): { sig: string; intf: T
   return {
     sig,
     intf: {
+      id: "",
+      kind: "interface",
       span: richSpan(intf),
       name: i.getName(),
       signature: sig,
       comments: jsDocsOf(intf),
-      code: clamp(intf.getText(), 20000),
       base_classes,
       type_parameters: typeParamsOf(intf),
-      methods,
-      properties,
+      callables,
+      fields,
       call_signatures,
       index_signatures,
       is_exported: isExportedDecl(intf),
       is_ambient: isAmbientDecl(intf),
-      start_line: intf.getStartLineNumber(true),
-      end_line: intf.getEndLineNumber(),
     },
   };
 }
 
-export function buildEnum(en: Node, root: string): { sig: string; en: TSEnum } {
+export function buildEnum(en: Node, root: string): { sig: string; en: TSType } {
   const sig = computeSignatureForDecl(en, root) ?? `${fileKeyOf(en.getSourceFile().getFilePath(), root).modulePrefix}.(anonymous)`;
   const e = en as unknown as { getName: () => string; getMembers: () => Node[]; isConstEnum?: () => boolean };
-  const members = e.getMembers().map((m) => {
+  const fields: Record<string, TSField> = {};
+  for (const m of e.getMembers()) {
     const mm = m as unknown as {
       getName: () => string;
       getValue?: () => string | number | undefined;
       getInitializer?: () => { getText: () => string } | undefined;
     };
     const v = mm.getValue?.();
-    return {
+    const value = v !== undefined && v !== null ? String(v) : mm.getInitializer?.()?.getText();
+    fields[mm.getName()] = {
+      id: "",
+      kind: "field",
       span: richSpan(m),
       name: mm.getName(),
-      value: v !== undefined && v !== null ? String(v) : (mm.getInitializer?.()?.getText() ?? null),
-      start_line: m.getStartLineNumber(true),
-      end_line: m.getEndLineNumber(),
+      ...(value != null ? { value } : {}),
     };
-  });
+  }
   return {
     sig,
     en: {
+      id: "",
+      kind: "enum",
       span: richSpan(en),
       name: e.getName(),
       signature: sig,
       comments: jsDocsOf(en),
-      code: clamp(en.getText(), 20000),
-      members,
+      fields,
       is_const: e.isConstEnum?.() ?? false,
       is_exported: isExportedDecl(en),
       is_ambient: isAmbientDecl(en),
-      start_line: en.getStartLineNumber(true),
-      end_line: en.getEndLineNumber(),
     },
   };
 }
 
-export function buildTypeAlias(ta: Node, root: string): { sig: string; ta: TSTypeAlias } {
+export function buildTypeAlias(ta: Node, root: string): { sig: string; ta: TSType } {
   const sig = computeSignatureForDecl(ta, root) ?? `${fileKeyOf(ta.getSourceFile().getFilePath(), root).modulePrefix}.(anonymous)`;
   const t = ta as unknown as { getName: () => string; getTypeNode?: () => { getText: () => string } | undefined };
   return {
     sig,
     ta: {
+      id: "",
+      kind: "type_alias",
       span: richSpan(ta),
       name: t.getName(),
       signature: sig,
       comments: jsDocsOf(ta),
-      code: clamp(ta.getText(), 20000),
       aliased_type: t.getTypeNode?.()?.getText() ?? "",
       type_parameters: typeParamsOf(ta),
       is_exported: isExportedDecl(ta),
       is_ambient: isAmbientDecl(ta),
-      start_line: ta.getStartLineNumber(true),
-      end_line: ta.getEndLineNumber(),
     },
   };
 }
@@ -788,17 +785,13 @@ export function buildTypeAlias(ta: Node, root: string): { sig: string; ta: TSTyp
 // statemented container (Module + Namespace share this)
 // ----------------------------------------------------------------------------------------------
 
-interface Buckets {
-  classes: Record<string, TSClass>;
-  interfaces: Record<string, TSInterface>;
-  enums: Record<string, TSEnum>;
-  type_aliases: Record<string, TSTypeAlias>;
+interface ScopeBuckets {
+  types: Record<string, TSType>;
   functions: Record<string, TSCallable>;
-  namespaces: Record<string, TSNamespace>;
-  variables: TSVariableDeclaration[];
+  fields: Record<string, TSField>;
 }
 
-function buildStatemented(container: Node, root: string, varScope: TSVariableDeclaration["scope"]): Buckets {
+function buildStatemented(container: Node, root: string, varScope: "module" | "namespace"): ScopeBuckets {
   const c = container as unknown as {
     getClasses: () => Node[];
     getInterfaces: () => Node[];
@@ -808,42 +801,43 @@ function buildStatemented(container: Node, root: string, varScope: TSVariableDec
     getModules: () => Node[];
     getVariableStatements: () => Node[];
   };
-  const classes: Record<string, TSClass> = {};
+  // One types{} map. Fill order (classes → interfaces → enums → aliases → namespaces) is the
+  // canonical precedence: on a member-key collision (e.g. class/interface declaration merging)
+  // the later kind wins, exactly as the historical per-kind bucket merge did.
+  const types: Record<string, TSType> = {};
   for (const cl of c.getClasses()) {
     const r = buildClass(cl, root);
-    classes[r.sig] = r.cls;
+    types[memberKey(r.sig)] = r.cls;
   }
-  const interfaces: Record<string, TSInterface> = {};
   for (const it of c.getInterfaces()) {
     const r = buildInterface(it, root);
-    interfaces[r.sig] = r.intf;
+    types[memberKey(r.sig)] = r.intf;
   }
-  const enums: Record<string, TSEnum> = {};
   for (const en of c.getEnums()) {
     const r = buildEnum(en, root);
-    enums[r.sig] = r.en;
+    types[memberKey(r.sig)] = r.en;
   }
-  const type_aliases: Record<string, TSTypeAlias> = {};
   for (const ta of c.getTypeAliases()) {
     const r = buildTypeAlias(ta, root);
-    type_aliases[r.sig] = r.ta;
+    types[memberKey(r.sig)] = r.ta;
   }
   const functions: Record<string, TSCallable> = {};
   for (const fn of c.getFunctions()) {
     if (isRedundantOverload(fn)) continue;
     const r = buildCallable(fn, fn, "function", root);
-    if (r) functions[r.sig] = r.callable;
+    if (r) functions[memberKey(r.sig, r.callable.accessor_kind)] = r.callable;
   }
-  const variables: TSVariableDeclaration[] = [];
+  const fields: Record<string, TSField> = {};
   for (const vs of c.getVariableStatements()) {
     for (const vd of (vs as unknown as { getDeclarations: () => Node[] }).getDeclarations()) {
       const init = (vd as unknown as { getInitializer?: () => Node | undefined }).getInitializer?.();
       if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
         const k: TSCallableKind = Node.isArrowFunction(init) ? "arrow" : "function_expression";
         const r = buildCallable(vd, init, k, root);
-        if (r) functions[r.sig] = r.callable;
+        if (r) functions[memberKey(r.sig)] = r.callable;
       } else {
-        variables.push(buildVariable(vd, varScope));
+        const f = buildVariableField(vd, varScope);
+        fields[f.name] = f;
       }
     }
   }
@@ -853,28 +847,29 @@ function buildStatemented(container: Node, root: string, varScope: TSVariableDec
   // loops above already claimed, so nothing is collected twice.
   walkBody(container, {
     onCall: () => {},
-    onLocal: () => {},
     onNestedCallable: (n) => {
       if (!Node.isArrowFunction(n) && !Node.isFunctionExpression(n)) return; // already bucketed
       const r = buildCallable(n, n, Node.isArrowFunction(n) ? "arrow" : "function_expression", root);
-      if (r) functions[r.sig] = r.callable;
+      if (r) functions[memberKey(r.sig)] = r.callable;
     },
     onNestedClass: () => {},
   });
-  const namespaces: Record<string, TSNamespace> = {};
   for (const ns of c.getModules()) {
     const r = buildNamespace(ns, root);
-    namespaces[r.sig] = r.ns;
+    types[memberKey(r.sig)] = r.ns;
   }
-  return { classes, interfaces, enums, type_aliases, functions, namespaces, variables };
+  return { types, functions, fields };
 }
 
-export function buildNamespace(ns: Node, root: string): { sig: string; ns: TSNamespace } {
+/** Gap A: a namespace is a nested *scope* — same buckets as a module (types/functions/fields). */
+export function buildNamespace(ns: Node, root: string): { sig: string; ns: TSType } {
   const sig = computeSignatureForDecl(ns, root) ?? `${fileKeyOf(ns.getSourceFile().getFilePath(), root).modulePrefix}.(anonymous)`;
   const buckets = buildStatemented(ns, root, "namespace");
   return {
     sig,
     ns: {
+      id: "",
+      kind: "namespace",
       span: richSpan(ns),
       name: (ns as unknown as { getName: () => string }).getName(),
       signature: sig,
@@ -882,8 +877,6 @@ export function buildNamespace(ns: Node, root: string): { sig: string; ns: TSNam
       ...buckets,
       is_exported: isExportedDecl(ns),
       is_ambient: isAmbientDecl(ns),
-      start_line: ns.getStartLineNumber(true),
-      end_line: ns.getEndLineNumber(),
     },
   };
 }
@@ -909,21 +902,22 @@ function buildImports(sf: Node): TSImport[] {
     const def = i.getDefaultImport?.();
     const ns = i.getNamespaceImport?.();
     const named = i.getNamedImports?.() ?? [];
-    if (def) out.push({ module, name: def.getText(), alias: null, is_type_only: typeOnly, import_kind: "default", ...s });
+    if (def) out.push({ module, name: def.getText(), is_type_only: typeOnly, import_kind: "default", ...s });
     if (ns) out.push({ module, name: "*", alias: ns.getText(), is_type_only: typeOnly, import_kind: "namespace", ...s });
     for (const ni of named) {
       const n = ni as unknown as { getName: () => string; getAliasNode?: () => { getText: () => string } | undefined; isTypeOnly?: () => boolean };
+      const alias = n.getAliasNode?.()?.getText();
       out.push({
         module,
         name: n.getName(),
-        alias: n.getAliasNode?.()?.getText() ?? null,
+        ...(alias != null ? { alias } : {}),
         is_type_only: typeOnly || (n.isTypeOnly?.() ?? false),
         import_kind: "named",
         ...s,
       });
     }
     if (!def && !ns && named.length === 0) {
-      out.push({ module, name: "", alias: null, is_type_only: typeOnly, import_kind: "side_effect", ...s });
+      out.push({ module, name: "", is_type_only: typeOnly, import_kind: "side_effect", ...s });
     }
   }
   return out;
@@ -939,21 +933,37 @@ function buildExports(sf: Node): TSExport[] {
       getNamespaceExport?: () => { getNameNode?: () => { getText: () => string } } | undefined;
       getNamedExports?: () => Node[];
     };
-    const module = e.getModuleSpecifierValue?.() ?? null;
+    const module = e.getModuleSpecifierValue?.();
     const typeOnly = e.isTypeOnly();
     const s = span(exp);
     const nsExp = e.getNamespaceExport?.();
     const named = e.getNamedExports?.() ?? [];
     if (nsExp) {
-      out.push({ module, name: "*", alias: nsExp.getNameNode?.()?.getText() ?? null, is_type_only: typeOnly, export_kind: module ? "re_export" : "namespace", ...s });
+      const alias = nsExp.getNameNode?.()?.getText();
+      out.push({
+        ...(module != null ? { module } : {}),
+        name: "*",
+        ...(alias != null ? { alias } : {}),
+        is_type_only: typeOnly,
+        export_kind: module ? "re_export" : "namespace",
+        ...s,
+      });
     }
     for (const ne of named) {
       const n = ne as unknown as { getName: () => string; getAliasNode?: () => { getText: () => string } | undefined };
-      out.push({ module, name: n.getName(), alias: n.getAliasNode?.()?.getText() ?? null, is_type_only: typeOnly, export_kind: module ? "re_export" : "named", ...s });
+      const alias = n.getAliasNode?.()?.getText();
+      out.push({
+        ...(module != null ? { module } : {}),
+        name: n.getName(),
+        ...(alias != null ? { alias } : {}),
+        is_type_only: typeOnly,
+        export_kind: module ? "re_export" : "named",
+        ...s,
+      });
     }
     if (!nsExp && named.length === 0 && module) {
       // `export * from "m"` with no namespace binding
-      out.push({ module, name: "*", alias: null, is_type_only: typeOnly, export_kind: "re_export", ...s });
+      out.push({ module, name: "*", is_type_only: typeOnly, export_kind: "re_export", ...s });
     }
   }
   return out;
@@ -997,30 +1007,20 @@ function collectComments(sf: Node): TSComment[] {
 
 export function buildModule(sf: Node, root: string): TSModule {
   const filePath = sf.getSourceFile().getFilePath();
-  const { fileKey, modulePrefix } = fileKeyOf(filePath, root);
   const buckets = buildStatemented(sf, root, "module");
   // schema-v2: retain the whole file text once on the module; every node's text slices off it.
   const source = (sf as unknown as { getFullText: () => string }).getFullText();
   const endLc = sf.getSourceFile().getLineAndColumnAtPos(source.length);
   return {
+    id: "",
+    kind: "module",
     span: { start: [1, 1], end: [endLc.line, endLc.column], bytes: [0, source.length] },
     source,
-    file_path: fileKey,
-    module_name: modulePrefix,
     imports: buildImports(sf),
     exports: buildExports(sf),
     comments: collectComments(sf),
-    classes: buckets.classes,
-    interfaces: buckets.interfaces,
-    enums: buckets.enums,
-    type_aliases: buckets.type_aliases,
-    functions: buckets.functions,
-    namespaces: buckets.namespaces,
-    variables: buckets.variables,
+    ...buckets,
     is_tsx: filePath.endsWith(".tsx"),
     is_declaration_file: (sf as unknown as { isDeclarationFile: () => boolean }).isDeclarationFile(),
-    content_hash: null,
-    last_modified: null,
-    file_size: null,
   };
 }

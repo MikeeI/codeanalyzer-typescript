@@ -4,15 +4,20 @@ import { mergeCallGraphs, selectProvider } from "./semantic_analysis";
 import { loadCache, saveCache } from "./utils";
 import { materialize } from "./build";
 import type { AnalysisOptions } from "./options";
-import type { TSApplication } from "./schema";
+import type { AnalysisInternal } from "./schema";
+import { type AnalysisResult, finalizeAnalysis } from "./schema/emit";
 import { buildSymbolTable } from "./syntactic_analysis";
 import { Logger } from "./utils";
 
+export type { AnalysisResult } from "./schema/emit";
+
 /**
- * The orchestrator. Order mirrors the reference analyzers: materialize deps → build the symbol
- * table → build the resolver call graph → cache the base → return the Application.
+ * The orchestrator. Order mirrors the reference analyzers (python core.py): materialize deps →
+ * build the symbol table → call-graph providers → program graphs → cache the id-free base →
+ * run the per-run pass spine (ids / body / heritage / homing / callees / attach) and assemble
+ * the wire envelope. Returns BOTH views: the wire `application` and the live `internal` tree.
  */
-export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
+export async function analyze(opts: AnalysisOptions): Promise<AnalysisResult> {
   const log = new Logger(opts.verbosity);
   log.info(`analyzing ${opts.input} (level ${opts.analysisLevel})`);
   const cacheDir = opts.cacheDir ?? path.join(opts.input, ".codeanalyzer");
@@ -38,8 +43,8 @@ export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
   const extraction = opts.analysisLevel >= 3 ? startExtraction(project, symbol_table, mat.tsConfigFilePath, opts, log) : null;
 
   // Call graph via the selected provider (union of tsc+jelly by default; --tsc-only / jelly opt-in).
-  // Only worth running at level >= 2: the v2 emitter discards call_graph/external_symbols/
-  // synthesized_callables at -a 1 (homeExternals/homeSynthesized in src/schema/v2/emit.ts are
+  // Only worth running at level >= 2: finalizeAnalysis discards call_graph/external_symbols/
+  // synthesized_callables at -a 1 (homeExternals/homeSynthesized in src/schema/emit.ts are
   // gated to `level >= 2`), so running the solve — including the heavier Jelly leg — at -a 1
   // would compute a result that's thrown away. Levels 3/4 need the provider for callee
   // resolution and are always >= 2, so this gate is safe.
@@ -66,7 +71,7 @@ export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
   }
   const call_graph = cg.edges;
 
-  const app: TSApplication = {
+  const app: AnalysisInternal = {
     symbol_table,
     call_graph,
     external_symbols: cg.external_symbols,
@@ -75,10 +80,10 @@ export async function analyze(opts: AnalysisOptions): Promise<TSApplication> {
 
   // Level 3 join: stages 5–7 (summary wavefront + SDG) consume the extraction AND the
   // provider-backfilled callee signatures. Strictly flag-gated so -a 1/-a 2 cost nothing.
-  if (extraction) {
-    app.program_graphs = await buildProgramGraphs(extraction, symbol_table, opts, log);
-  }
+  const pg = extraction ? await buildProgramGraphs(extraction, symbol_table, opts, log) : null;
 
-  saveCache(cacheDir, { symbol_table, call_graph });
-  return app;
+  // Cache the id-free base (ids/body/heritage are per-run layers stamped by finalizeAnalysis;
+  // the cached tree must stay --app-name-free).
+  saveCache(cacheDir, { symbol_table });
+  return finalizeAnalysis(app, pg, opts);
 }

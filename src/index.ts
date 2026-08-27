@@ -11,8 +11,8 @@ async function main(): Promise<void> {
       emitSchema(opts);
       return;
     }
-    const app = await analyze(opts);
-    await emit(app, opts);
+    const result = await analyze(opts);
+    await emit(result.application, opts);
   } catch (e) {
     const err = e as Error;
     process.stderr.write(`[codeanalyzer-ts] FATAL ${err.stack ?? err.message}\n`);

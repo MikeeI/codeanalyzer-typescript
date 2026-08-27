@@ -1,23 +1,33 @@
 /**
- * The canonical CLDK analysis schema for TypeScript.
+ * The canonical CLDK analysis schema for TypeScript — the NATIVE model. The stages build this
+ * shape directly (schema v2, canonical-schema.md): one additive containment tree of nodes
+ * (`id` / `kind` / `span` / named child maps) that `analysis.json` and the Neo4j projection both
+ * emit. There is no second model and no emit-time reshape: what the builders construct is what
+ * the wire carries, minus the INTERNAL fields listed below (stripped at serialization).
  *
- * Mirrors the identity-only Python schema (codeanalyzer-python/.../py_schema.py) field for
- * field on the invariant spine — `TSApplication { symbol_table, call_graph, external_symbols }`,
- * `Module → Class/Callable` nesting, identity-only `TSCallEdge` whose `source`/`target` are
- * bare signature strings — and extends it at the leaves with TypeScript-native node kinds
- * (interface / type-alias / enum / namespace) and typed fields (generics, modifiers, ...).
- * See SCHEMA_DECISIONS.md.
+ * Mirrors python's `codeanalyzer/schema/py_schema.py` field-for-field on the invariant spine —
+ * `symbol_table{module → types{}/functions{}/fields{}}`, `type → callables{}/fields{}`,
+ * `callable → body{}` — and extends it at the leaves with TypeScript-native node kinds
+ * (interface / type_alias / enum / namespace) and typed fields (generics, modifiers, ...).
+ *
+ * Conventions:
+ *  - A fact is PRESENT or ABSENT; never `null`. Optional fields are omitted, not nulled. The one
+ *    sanctioned null is a `call` body node's `callee` at L1 (refined null→id at L2).
+ *  - `id` fields are stamped per-run by `assignIds` (ids embed `--app-name`; the cached tree must
+ *    stay app-name-free). Builders initialize them to "".
+ *  - INTERNAL fields (never on the wire; serialize.ts strips them by key): `call_sites`,
+ *    `abs_path`, `content_hash`, `last_modified`, `file_size`. They exist for the call-graph
+ *    resolver, the dataflow join, and the analysis cache.
  *
  * All field names are snake_case so `JSON.stringify` emits keys the SDK Pydantic models parse.
- * The matching Pydantic models live in python-sdk/cldk/models/typescript/models.py and MUST be
- * co-evolved with this file.
  */
 
+import { modulePrefixOf } from "./ids";
+
 // ----------------------------------------------------------------------------------------------
-// Span (schema-v2) — the one universal attribute. `bytes` are char offsets into the owning
-// module's `source` blob, so `source.slice(bytes[0], bytes[1])` reproduces the node's text
-// (what the per-node `code` field used to hold). `start`/`end` are [line, column], 1-based, for
-// display and addressing. Captured on every container node during the AST walk (builders.ts).
+// Span — the one universal attribute. `bytes` are char offsets into the owning module's `source`
+// blob, so `source.slice(bytes[0], bytes[1])` reproduces the node's text. `start`/`end` are
+// [line, column], 1-based.
 // ----------------------------------------------------------------------------------------------
 
 export interface TSSpan {
@@ -27,13 +37,13 @@ export interface TSSpan {
 }
 
 // ----------------------------------------------------------------------------------------------
-// Leaf models
+// Leaf models (wire shapes — flat line/col ints are part of the wire here)
 // ----------------------------------------------------------------------------------------------
 
 export interface TSImport {
   module: string; // the module specifier, e.g. "./user" or "@nestjs/common"
   name: string; // the imported binding (or "" for side-effect imports / "*" for namespace)
-  alias: string | null;
+  alias?: string;
   is_type_only: boolean; // `import type { X } ...`
   import_kind: "named" | "default" | "namespace" | "side_effect";
   start_line: number;
@@ -43,9 +53,9 @@ export interface TSImport {
 }
 
 export interface TSExport {
-  module: string | null; // re-export source, e.g. "./user"; null for `export { x }`
+  module?: string; // re-export source, e.g. "./user"; absent for `export { x }`
   name: string; // exported name ("*" for `export * from`)
-  alias: string | null;
+  alias?: string;
   is_type_only: boolean;
   export_kind: "named" | "default" | "namespace" | "re_export";
   start_line: number;
@@ -63,25 +73,9 @@ export interface TSComment {
   end_column: number;
 }
 
-export interface TSVariableDeclaration {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  type: string | null;
-  initializer: string | null;
-  value: unknown | null;
-  scope: "module" | "namespace" | "class" | "function" | "block";
-  declaration_kind: "const" | "let" | "var" | "using" | "unknown";
-  is_readonly: boolean;
-  is_exported: boolean;
-  start_line: number;
-  end_line: number;
-  start_column: number;
-  end_column: number;
-}
-
 export interface TSDecorator {
   name: string; // locally written name, e.g. "Get"
-  qualified_name: string | null; // checker-resolved FQN when available
+  qualified_name?: string; // checker-resolved FQN when available
   positional_arguments: string[]; // raw source fragments
   keyword_arguments: Record<string, string>; // object-literal args flattened to key→source
   start_line: number;
@@ -92,18 +86,18 @@ export interface TSDecorator {
 
 export interface TSTypeParameter {
   name: string;
-  constraint: string | null; // the `extends ...` clause text
-  default: string | null; // the `= ...` clause text
+  constraint?: string; // the `extends ...` clause text
+  default?: string; // the `= ...` clause text
 }
 
 export interface TSCallableParameter {
   name: string;
-  type: string | null;
-  default_value: string | null;
+  type?: string;
+  default_value?: string;
   is_optional: boolean;
   is_rest: boolean;
   is_readonly: boolean; // parameter property `constructor(readonly x: T)`
-  accessibility: string | null; // parameter property visibility (NestJS DI / TS shorthand)
+  accessibility?: string; // parameter property visibility (NestJS DI / TS shorthand)
   decorators: TSDecorator[]; // param decorators (e.g. @Param('id'))
   start_line: number;
   end_line: number;
@@ -111,25 +105,114 @@ export interface TSCallableParameter {
   end_column: number;
 }
 
+export interface TSOverloadSignature {
+  parameters: TSCallableParameter[];
+  return_type?: string;
+  type_parameters: TSTypeParameter[];
+  start_line: number;
+  end_line: number;
+}
+
+/**
+ * INTERNAL — a recorded call site. Never on the wire (the wire's view is the `call` node in the
+ * owning callable's `body{}`, built per-run by the l1Body pass). Kept on the callable because the
+ * call-graph resolver joins on it (span-matched to the AST) and the cache round-trips it.
+ * `callee_signature` is backfilled in place by the tsc resolver.
+ */
 export interface TSCallsite {
   method_name: string;
-  receiver_expr: string | null;
-  receiver_type: string | null;
+  receiver_expr?: string;
+  receiver_type?: string;
   argument_types: string[];
   type_arguments: string[]; // explicit call type args, foo<T>()
-  return_type: string | null;
-  callee_signature: string | null; // null when recorded; backfilled by the resolver call graph
+  return_type?: string;
+  callee_signature?: string; // absent when recorded; backfilled by the resolver call graph
   is_constructor_call: boolean; // `new X()`
   is_optional_chain: boolean; // `a?.b()`
   start_line: number;
   start_column: number;
   end_line: number;
   end_column: number;
-  bytes?: [number, number]; // schema-v2: char offsets [start, end] into module.source
+  bytes: [number, number]; // char offsets [start, end] into module.source
 }
 
 // ----------------------------------------------------------------------------------------------
-// Callable (function / method / constructor / accessor / arrow)
+// Body nodes — a callable's `body{}` map, keyed by local id (`line:col`, or `@tag` synthetic).
+// L1: `call` nodes; L3 adds statements + @entry/@exit; L4 adds formal/actual param vertices.
+// ----------------------------------------------------------------------------------------------
+
+export interface TSBodyNode {
+  kind: string; // "call" | "statement" | "entry" | "exit" | "formal_in" | "actual_in" | …
+  span?: TSSpan;
+  callee?: string | null; // `call` nodes: null at L1, refined to an id at L2 (the one sanctioned null)
+  of?: string; // synthetic param vertices: the flowed name ("arg0", "$ret", a global path)
+  parent?: string; // actual_in/actual_out: the anchoring call-site statement's local id
+  // call-node attributes (copied from the recorded call site by the l1Body pass)
+  method_name?: string;
+  receiver_expr?: string;
+  receiver_type?: string;
+  argument_types?: string[];
+  type_arguments?: string[];
+  return_type?: string;
+  is_constructor_call?: boolean;
+  is_optional_chain?: boolean;
+}
+
+// ----------------------------------------------------------------------------------------------
+// Intra-callable edge lists (L3/L4), bare local-id endpoints
+// ----------------------------------------------------------------------------------------------
+
+export interface TSCfgEdge {
+  src: string;
+  dst: string;
+  kind: string;
+}
+export interface TSCdgEdge {
+  src: string;
+  dst: string;
+}
+export interface TSDdgEdge {
+  src: string;
+  dst: string;
+  var?: string;
+  prov: string[]; // "reaching-defs" (L3 syntactic; sanctioned additive token) / "points-to" (L4)
+}
+export interface TSSummaryEdge {
+  src: string;
+  dst: string;
+  var?: string;
+}
+
+// ----------------------------------------------------------------------------------------------
+// Field — module-level binding, class attribute / interface property, or enum member.
+// One open-ish shape: each origin sets its own subset (matching what the origin declares).
+// ----------------------------------------------------------------------------------------------
+
+export interface TSField {
+  id: string; // `${parentId}/${name}` — stamped per-run by assignIds
+  kind: "field";
+  span?: TSSpan; // absent for constructor parameter properties
+  name: string;
+  type?: string;
+  // module/namespace variable
+  initializer?: string;
+  scope?: "module" | "namespace";
+  declaration_kind?: "const" | "let" | "var" | "using" | "unknown";
+  is_exported?: boolean;
+  // class attribute / interface property
+  comments?: TSComment[];
+  decorators?: TSDecorator[];
+  accessibility?: string;
+  is_static?: boolean;
+  is_readonly?: boolean;
+  is_optional?: boolean;
+  is_abstract?: boolean;
+  // enum member
+  value?: string; // initializer text or computed const value
+}
+
+// ----------------------------------------------------------------------------------------------
+// Callable (function / method / constructor / accessor / arrow / function expression)
 // ----------------------------------------------------------------------------------------------
 
 export type TSCallableKind =
@@ -141,36 +224,19 @@ export type TSCallableKind =
   | "arrow"
   | "function_expression";
 
-export interface TSOverloadSignature {
-  parameters: TSCallableParameter[];
-  return_type: string | null;
-  type_parameters: TSTypeParameter[];
-  start_line: number;
-  end_line: number;
-}
-
 export interface TSCallable {
-  span?: TSSpan; // schema-v2 precise span (line/col + char offsets into module.source)
+  id: string; // can:// containment id — stamped per-run by assignIds
+  kind: TSCallableKind;
+  span: TSSpan;
   name: string;
-  path: string; // file path of the declaration
-  signature: string; // e.g. src/user.UserService.getUser — the edge id
+  signature: string; // e.g. src/user.UserService.getUser — the internal join key
   comments: TSComment[];
   decorators: TSDecorator[];
   parameters: TSCallableParameter[];
   type_parameters: TSTypeParameter[];
-  return_type: string | null;
-  code: string | null;
-  start_line: number;
-  end_line: number;
-  code_start_line: number;
-  call_sites: TSCallsite[];
-  inner_callables: Record<string, TSCallable>;
-  inner_classes: Record<string, TSClass>;
-  local_variables: TSVariableDeclaration[];
+  return_type?: string;
   cyclomatic_complexity: number;
-  // --- TypeScript-native typed fields ---
-  kind: TSCallableKind;
-  accessibility: string | null; // public | private | protected | null
+  accessibility?: string; // public | private | protected
   is_static: boolean;
   is_abstract: boolean;
   is_async: boolean;
@@ -180,172 +246,87 @@ export interface TSCallable {
   is_exported: boolean;
   is_ambient: boolean; // `declare`
   is_implicit: boolean; // synthesized default constructor
-  accessor_kind: string | null; // getter | setter | null
+  accessor_kind?: string; // getter | setter
   overload_signatures: TSOverloadSignature[];
+  body: Record<string, TSBodyNode>; // L1: `call` nodes (l1Body pass); L3+: full statements
+  callables?: Record<string, TSCallable>; // nested callables (closures) — present only when non-empty
+  types?: Record<string, TSType>; // nested (local) classes — present only when non-empty
+  cfg?: TSCfgEdge[]; // L3
+  cdg?: TSCdgEdge[]; // L3
+  ddg?: TSDdgEdge[]; // L3→L4
+  summary?: TSSummaryEdge[]; // L4
+  // INTERNAL (stripped from the wire)
+  abs_path: string; // ABSOLUTE file path of the declaration — the resolver's AST-index key
+  call_sites: TSCallsite[];
 }
 
 // ----------------------------------------------------------------------------------------------
-// Class attribute
+// Type — one node with a single `kind`; the buckets it populates depend on that kind:
+//   class / interface → callables{} + fields{};  enum → fields{};  type_alias → (leaf);
+//   namespace → types{} + functions{} + fields{} (a sub-file scope, same buckets as a module).
 // ----------------------------------------------------------------------------------------------
 
-export interface TSClassAttribute {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  type: string | null;
-  comments: TSComment[];
-  decorators: TSDecorator[];
-  initializer: string | null;
-  accessibility: string | null;
-  is_static: boolean;
-  is_readonly: boolean;
-  is_optional: boolean;
-  is_abstract: boolean;
-  start_line: number;
-  end_line: number;
-}
+export type TSTypeKind = "class" | "interface" | "enum" | "type_alias" | "namespace";
 
-// ----------------------------------------------------------------------------------------------
-// Class
-// ----------------------------------------------------------------------------------------------
-
-export interface TSClass {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  signature: string; // e.g. src/user.UserService
-  comments: TSComment[];
-  code: string | null;
-  decorators: TSDecorator[];
-  base_classes: string[]; // spine: union of extends + implements (signature strings)
-  implements_types: string[]; // typed split: just the implemented interfaces
-  type_parameters: TSTypeParameter[];
-  methods: Record<string, TSCallable>;
-  attributes: Record<string, TSClassAttribute>;
-  inner_classes: Record<string, TSClass>;
-  is_abstract: boolean;
-  is_exported: boolean;
-  is_ambient: boolean;
-  start_line: number;
-  end_line: number;
-}
-
-// ----------------------------------------------------------------------------------------------
-// Interface (TS node kind)
-// ----------------------------------------------------------------------------------------------
-
-export interface TSInterface {
-  span?: TSSpan; // schema-v2 precise span
+export interface TSType {
+  id: string; // stamped per-run by assignIds
+  kind: TSTypeKind;
+  span: TSSpan;
   name: string;
   signature: string;
   comments: TSComment[];
-  code: string | null;
-  base_classes: string[]; // extended interfaces (signature strings)
-  type_parameters: TSTypeParameter[];
-  methods: Record<string, TSCallable>; // bodiless
-  properties: Record<string, TSClassAttribute>;
-  call_signatures: string[]; // raw text of call/construct signatures
-  index_signatures: string[]; // raw text of `[key: string]: T`
   is_exported: boolean;
   is_ambient: boolean;
-  start_line: number;
-  end_line: number;
+  // class / interface / enum / namespace members
+  callables?: Record<string, TSCallable>;
+  fields?: Record<string, TSField>;
+  types?: Record<string, TSType>; // namespace only
+  functions?: Record<string, TSCallable>; // namespace only
+  // class
+  decorators?: TSDecorator[];
+  base_classes?: string[]; // spine: union of extends + implements (signature strings)
+  implements_types?: string[]; // typed split: just the implemented interfaces
+  is_abstract?: boolean;
+  // class / interface / type_alias generics
+  type_parameters?: TSTypeParameter[];
+  // interface
+  call_signatures?: string[]; // raw text of call/construct signatures
+  index_signatures?: string[]; // raw text of `[key: string]: T`
+  // enum
+  is_const?: boolean;
+  // type_alias
+  aliased_type?: string; // the RHS type text
+  // Heritage projection (resolved-only), stamped per-run by the heritage pass:
+  extends_ids?: string[]; // resolved can:// id(s) of the extended class/interface(s)
+  implements_ids?: string[]; // resolved can:// id(s) of implemented interfaces (classes only)
 }
 
 // ----------------------------------------------------------------------------------------------
-// Enum (TS node kind)
-// ----------------------------------------------------------------------------------------------
-
-export interface TSEnumMember {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  value: string | null; // initializer text or computed const value
-  start_line: number;
-  end_line: number;
-}
-
-export interface TSEnum {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  signature: string;
-  comments: TSComment[];
-  code: string | null;
-  members: TSEnumMember[];
-  is_const: boolean;
-  is_exported: boolean;
-  is_ambient: boolean;
-  start_line: number;
-  end_line: number;
-}
-
-// ----------------------------------------------------------------------------------------------
-// Type alias (TS node kind)
-// ----------------------------------------------------------------------------------------------
-
-export interface TSTypeAlias {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  signature: string;
-  comments: TSComment[];
-  code: string | null;
-  aliased_type: string; // the RHS type text
-  type_parameters: TSTypeParameter[];
-  is_exported: boolean;
-  is_ambient: boolean;
-  start_line: number;
-  end_line: number;
-}
-
-// ----------------------------------------------------------------------------------------------
-// Namespace (TS node kind) — recursive container, same shape as Module's declaration buckets
-// ----------------------------------------------------------------------------------------------
-
-export interface TSNamespace {
-  span?: TSSpan; // schema-v2 precise span
-  name: string;
-  signature: string;
-  comments: TSComment[];
-  classes: Record<string, TSClass>;
-  interfaces: Record<string, TSInterface>;
-  enums: Record<string, TSEnum>;
-  type_aliases: Record<string, TSTypeAlias>;
-  functions: Record<string, TSCallable>;
-  variables: TSVariableDeclaration[];
-  namespaces: Record<string, TSNamespace>;
-  is_exported: boolean;
-  is_ambient: boolean;
-  start_line: number;
-  end_line: number;
-}
-
-// ----------------------------------------------------------------------------------------------
-// Module (compilation unit / file)
+// Module (compilation unit / file) — a scope holding types, functions, and free bindings
 // ----------------------------------------------------------------------------------------------
 
 export interface TSModule {
-  span?: TSSpan; // schema-v2 precise span (whole file)
-  source?: string | null; // schema-v2: full file text; every node's text slices off this
-  file_path: string;
-  module_name: string; // the file key minus extension (== signature prefix)
+  id: string; // can://<lang>/<app>/<fileKey> — stamped per-run by assignIds
+  kind: "module";
+  span: TSSpan; // whole file
+  source: string; // full file text, once; every node's text slices off this
   imports: TSImport[];
   exports: TSExport[];
   comments: TSComment[];
-  classes: Record<string, TSClass>;
-  interfaces: Record<string, TSInterface>;
-  enums: Record<string, TSEnum>;
-  type_aliases: Record<string, TSTypeAlias>;
-  functions: Record<string, TSCallable>;
-  namespaces: Record<string, TSNamespace>;
-  variables: TSVariableDeclaration[];
-  // TS file flags
+  types: Record<string, TSType>; // classes/interfaces/enums/type-aliases/namespaces
+  functions: Record<string, TSCallable>; // free functions
+  fields: Record<string, TSField>; // module-level const/let/var
   is_tsx: boolean;
   is_declaration_file: boolean;
-  // caching metadata
-  content_hash: string | null;
-  last_modified: number | null;
-  file_size: number | null;
+  // INTERNAL — caching metadata (stripped from the wire)
+  content_hash?: string;
+  last_modified?: number;
+  file_size?: number;
 }
 
 // ----------------------------------------------------------------------------------------------
-// Call-graph edge (identity-only)
+// Call-graph edge (identity-only, provider output; endpoints are signature strings until the
+// call-graph-ids pass rewrites them onto can:// ids at L2)
 // ----------------------------------------------------------------------------------------------
 
 export const CALL_DEP = "CALL_DEP" as const;
@@ -358,10 +339,6 @@ export interface TSCallEdge {
   provenance: string[]; // e.g. ["tsc"]
   tags: Record<string, string>;
 }
-
-// ----------------------------------------------------------------------------------------------
-// Application (root)
-// ----------------------------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------------------------
 // External (phantom) symbol — a synthetic stub for a call target OUTSIDE the project (an imported
@@ -388,13 +365,104 @@ export interface TSSynthesizedCallable {
   start_column: number;
 }
 
-export interface TSApplication {
+/**
+ * The analyzer's INTERNAL working set: the live tree plus the signature-keyed provider outputs.
+ * `finalizeAnalysis` consumes it and assembles the wire (`TSAnalysis`); it is never serialized
+ * itself. (The program-graph IR travels separately — see AnalysisResult.)
+ */
+export interface AnalysisInternal {
   symbol_table: Record<string, TSModule>;
   call_graph: TSCallEdge[];
   external_symbols: Record<string, TSExternalSymbol>;
   synthesized_callables: Record<string, TSSynthesizedCallable>;
-  /** Level-3 CFG/PDG/SDG section — present only at `-a 3` (see schema/graphs.ts). */
-  program_graphs?: import("./graphs").ProgramGraphs;
+}
+
+// ----------------------------------------------------------------------------------------------
+// The wire: envelope → application root → cross-callable edges (what analysis.json IS, and what
+// the Neo4j projection consumes)
+// ----------------------------------------------------------------------------------------------
+
+export interface TSAnalysis {
+  schema_version: string; // "2.1.0"
+  language: string; // "typescript"
+  max_level: number; // highest level populated; consumers read this, not key-sniffing
+  k_limit?: number; // access-path depth bound for the L3/L4 dataflow (present at L3+)
+  analyzer: TSAnalyzer; // which analyzer produced this artifact, and at what version
+  application: TSApplication;
+}
+
+/** Analyzer identity — lets consumers correlate an `analysis.json` with the tool/version that emitted it. */
+export interface TSAnalyzer {
+  name: string; // "codeanalyzer-typescript"
+  version: string; // ANALYZER_VERSION (src/utils/version.ts)
+}
+
+/** The application ROOT node (python's PyApplication): the containment tree + app-scope overlays. */
+export interface TSApplication {
+  id: string; // can://<lang>/<app>
+  kind: "application";
+  symbol_table: Record<string, TSModule>; // keyed by project-relative POSIX path (with extension)
+  call_graph: TSCallGraphEdge[]; // L2 — callable → callable (empty at L1)
+  param_in: TSParamEdge[]; // L4 (empty until L4)
+  param_out: TSParamEdge[]; // L4
+  // TS-additive (parity): edge endpoints outside the containment tree need an id home.
+  external_symbols?: Record<string, import("./homing").TSExternalNode>; // L2 — library call targets, keyed by id
+  // L2 — 2.1.0 compatibility index: pre-2.1.0 anonymous-callable id → the tree id that replaced
+  // it. Entries whose key equals their own `id` are the residual fallback nodes for signatures no
+  // provider could name.
+  synthesized_callables?: Record<string, import("./homing").TSSynthesizedNode>;
+}
+
+/** A wire call-graph edge: identity-only, can:// endpoints (l2Callees re-identifies onto these). */
+export interface TSCallGraphEdge {
+  src: string;
+  dst: string;
+  prov: string[]; // provenance, e.g. ["tsc"], ["jelly"]
+  weight: number;
+}
+
+export interface TSParamEdge {
+  src: string;
+  dst: string;
+  var?: string;
+}
+
+// ----------------------------------------------------------------------------------------------
+// Tree walkers — the one place the containment reach is defined (shared by the id/body/callee
+// passes, the call-graph resolver, and the dataflow join).
+// ----------------------------------------------------------------------------------------------
+
+/** Depth-first over every callable in a module: free functions, type members (class/interface
+ * accessors and methods, namespace functions), and everything nested inside callables. */
+export function forEachCallable(mod: TSModule, fn: (c: TSCallable) => void): void {
+  const visitCallable = (c: TSCallable): void => {
+    fn(c);
+    for (const nested of Object.values(c.callables ?? {})) visitCallable(nested);
+    for (const t of Object.values(c.types ?? {})) visitType(t);
+  };
+  const visitType = (t: TSType): void => {
+    for (const m of Object.values(t.callables ?? {})) visitCallable(m);
+    for (const f of Object.values(t.functions ?? {})) visitCallable(f); // namespace
+    for (const nt of Object.values(t.types ?? {})) visitType(nt); // namespace
+  };
+  for (const f of Object.values(mod.functions ?? {})) visitCallable(f);
+  for (const t of Object.values(mod.types ?? {})) visitType(t);
+}
+
+/** Depth-first over every type node in a module, including types nested inside callables. */
+export function forEachType(mod: TSModule, fn: (t: TSType) => void): void {
+  const visitType = (t: TSType): void => {
+    fn(t);
+    for (const nt of Object.values(t.types ?? {})) visitType(nt);
+    for (const m of Object.values(t.callables ?? {})) visitCallable(m);
+    for (const f of Object.values(t.functions ?? {})) visitCallable(f);
+  };
+  const visitCallable = (c: TSCallable): void => {
+    for (const nested of Object.values(c.callables ?? {})) visitCallable(nested);
+    for (const t of Object.values(c.types ?? {})) visitType(t);
+  };
+  for (const t of Object.values(mod.types ?? {})) visitType(t);
+  for (const f of Object.values(mod.functions ?? {})) visitCallable(f);
 }
 
 // ==============================================================================================
@@ -407,8 +475,7 @@ export interface TSApplication {
  */
 export function fileKeyOf(absPath: string, projectRoot: string): { fileKey: string; modulePrefix: string } {
   const rel = toPosix(relativePath(projectRoot, absPath));
-  const modulePrefix = stripTsExtension(rel);
-  return { fileKey: rel, modulePrefix };
+  return { fileKey: rel, modulePrefix: modulePrefixOf(rel) };
 }
 
 /**
@@ -424,14 +491,10 @@ export function constructorSignatureOf(classSignature: string): string {
   return `${classSignature}.constructor`;
 }
 
-// --- small path helpers (kept dependency-free so schema.ts has no runtime imports) ---
+// --- small path helpers (kept dependency-light so schema.ts has no runtime deps beyond ids) ---
 
 function toPosix(p: string): string {
   return p.replace(/\\/g, "/");
-}
-
-function stripTsExtension(relPosix: string): string {
-  return relPosix.replace(/\.d\.ts$/, "").replace(/\.(tsx|ts|jsx|js|mts|cts|mjs|cjs)$/, "");
 }
 
 function relativePath(from: string, to: string): string {
