@@ -29,6 +29,34 @@ export function idFromSig(moduleId: string, modulePrefix: string, sig: string): 
   return `${moduleId}/${tail.split(".").join("/")}`;
 }
 
+/**
+ * Repository-artifact ids. Leading "./" and "/" are dropped as SEPARATORS only — dotfiles
+ * (`.env`, `.github/...`) keep their leading dot (python's rule).
+ */
+export function artifactIdOf(appName: string, relPath: string): string {
+  let rel = relPath.replace(/\\/g, "/");
+  while (rel.startsWith("./")) rel = rel.slice(2);
+  rel = rel.replace(/^\/+/, "");
+  // Language-NEUTRAL namespace (python PR #160): the first segment is `artifact`, not a
+  // language — sibling analyzers over the same repo emit the SAME id for the same file.
+  return `can://artifact/${appName}/${rel}`;
+}
+
+/** Config-key id: the owning artifact's id, `@key/`, then the dotted path. */
+export function configKeyIdOf(artifactId: string, dotted: string): string {
+  return `${artifactId}@key/${dotted}`;
+}
+
+/** Package URL for an npm package name — the cross-language package id (`pkg:npm/...`). */
+export function purlNpm(name: string): string {
+  if (name.startsWith("@")) {
+    const slash = name.indexOf("/");
+    const scope = encodeURIComponent(name.slice(0, slash)); // "@scope" → "%40scope" (purl spec)
+    return `pkg:npm/${scope}/${name.slice(slash + 1)}`;
+  }
+  return `pkg:npm/${name}`;
+}
+
 /** The map key for a callable/type within its parent: the last signature segment (+ accessor tag). */
 export function memberKey(sig: string, accessorKind?: string | null): string {
   const seg = sig.split(".").pop() ?? sig;

@@ -1,0 +1,214 @@
+import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { project as neoProject } from "../src/build/neo4j";
+import { analyze } from "../src/core";
+import type { AnalysisOptions } from "../src/options";
+
+const FIXTURE = path.resolve(import.meta.dir, "fixtures/artifacts-app");
+function options(level: number): AnalysisOptions {
+  return {
+    input: FIXTURE, output: null, emit: "json", appName: "artifacts-app", neo4jUri: null,
+    neo4jUser: "neo4j", neo4jPassword: "", neo4jDatabase: null, analysisLevel: level,
+    graphs: level >= 3 ? ["cfg", "dfg", "pdg", "sdg"] : [], graphFieldDepth: 3, jobs: 1,
+    targetFiles: null, skipTests: true, eager: true, noBuild: true, phantoms: true,
+    cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), "cants-cu-")), verbosity: 0,
+  } as AnalysisOptions;
+}
+
+const r1 = await analyze(options(1));
+const mod = r1.application.application.symbol_table["src/config.ts"];
+
+describe("config_access body nodes (#101 unit C1)", () => {
+  test("member, element, and destructured env reads all mint nodes with keys", () => {
+    const nodesOf = (fn: string) => Object.values(mod?.functions[fn]?.body ?? {}).filter((b) => b.kind === "config_access");
+    expect(nodesOf("readHost").map((n) => n.key)).toEqual(["PAYMENT_HOST"]);
+    expect(nodesOf("readFlag").map((n) => n.key)).toEqual(["FEATURE_FLAG"]);
+    expect(nodesOf("readDestructured").map((n) => n.key)).toEqual(["NODE_OPTIONS"]);
+    expect(nodesOf("readHost")[0]?.root).toBe("process.env");
+    expect(nodesOf("readHost")[0]?.callee).toBeUndefined(); // a read is not a call
+  });
+
+  test("a dynamic key mints a node with no key", () => {
+    const n = Object.values(mod?.functions["readVia"]?.body ?? {}).filter((b) => b.kind === "config_access");
+    expect(n.length).toBe(1);
+    expect(n[0]?.key).toBeUndefined();
+  });
+
+  test("a property-initializer env read attributes to the constructor, not module scope", () => {
+    const ctor = mod?.types["Client"]?.callables?.["constructor"];
+    const nodes = Object.values(ctor?.body ?? {}).filter((b) => b.kind === "config_access");
+    expect(nodes.map((n) => n.key)).toEqual(["PAYMENT_HOST"]);
+  });
+
+  test("a call and a config read sharing a start position get distinct body keys", () => {
+    const body = mod?.functions["readList"]?.body ?? {};
+    const call = Object.entries(body).find(([, b]) => b.kind === "call");
+    const access = Object.entries(body).find(([, b]) => b.kind === "config_access");
+    expect(call).toBeDefined();
+    expect(access).toBeDefined();
+    const [callKey] = call!;
+    const [accessKey, accessNode] = access!;
+    expect(accessNode.key).toBe("LIST");
+    expect(accessKey).not.toBe(callKey);
+    expect(accessKey).toBe(`${callKey}/2`);
+  });
+});
+
+const r2 = await analyze(options(2));
+const app2 = r2.application.application;
+const useDsts = (fnFragment: string): string[] =>
+  app2.config_uses.filter((u) => u.src.includes(fnFragment)).map((u) => u.dst).sort();
+
+describe("config_use literal tier (#101 unit C3)", () => {
+  test("a literal env read joins every declaring ConfigKey", () => {
+    const dsts = useDsts("readHost");
+    expect(dsts).toContain("can://artifact/artifacts-app/.env@key/PAYMENT_HOST");
+    expect(dsts).toContain("can://artifact/artifacts-app/Dockerfile@key/PAYMENT_HOST");
+    expect(app2.config_uses.every((u) => u.prov.includes("literal"))).toBe(true);
+  });
+
+  test("src is a global ordinal body-node id", () => {
+    const u = app2.config_uses.find((x) => x.src.includes("readHost"));
+    expect(u?.src).toMatch(/^can:\/\/typescript\/artifacts-app\/src\/config\.ts\/readHost@\d+:\d+$/);
+  });
+
+  test("a literal with no declared key is an undefined-key read, not an edge", () => {
+    const read = app2.config_reads.find((r) => r.key === "NOT_DECLARED_ANYWHERE");
+    expect(read?.reason).toBe("undefined-key");
+    expect(read?.prov).toEqual(["literal"]);
+    expect(app2.config_uses.some((u) => u.src.includes("readUndeclared"))).toBe(false);
+  });
+
+  test("a dynamic key is a non-literal read at L2", () => {
+    const read = app2.config_reads.find((r) => r.site.includes("readVia"));
+    expect(read?.reason).toBe("non-literal");
+    expect(read?.key).toBeUndefined();
+  });
+
+  test("Dockerfile ARG is never bindable", () => {
+    // Assert the real invariant (namespace, resolved from the TSConfigKey) rather than sniffing
+    // the id's "arg." prefix — a dockerfile-namespace key's id is ALWAYS "arg.<name>" (assignIds),
+    // so `dst.endsWith("@key/BUILD_ID")` can never be true regardless of what the rule tables do.
+    // `readBuildId` reads BUILD_ID, which ONLY Dockerfile ARG declares — a real read exercises
+    // this invariant instead of leaving it vacuously true on a fixture with nothing to bind.
+    const namespaceOf = new Map<string, string>();
+    for (const art of Object.values(app2.artifacts)) {
+      for (const ck of art.config_keys) namespaceOf.set(ck.id, ck.namespace);
+    }
+    expect(app2.config_uses.some((u) => namespaceOf.get(u.dst) === "dockerfile")).toBe(false);
+
+    // Positive half: the read was SEEN and deliberately left unbound, not silently dropped.
+    const read = app2.config_reads.find((r) => r.site.includes("readBuildId"));
+    expect(read?.reason).toBe("undefined-key");
+    expect(read?.key).toBe("BUILD_ID");
+  });
+
+  test("a CALL rule resolves through the resolved external callee", () => {
+    const dsts = useDsts("readViaLibrary");
+    expect(dsts.some((d) => d.endsWith("@key/PAYMENT_HOST"))).toBe(true);
+    const u = app2.config_uses.find((x) => x.src.includes("readViaLibrary"));
+    expect(u?.src).toMatch(/@\d+:\d+$/); // the CALL node's ordinal id
+  });
+
+  test("an interpolated template-literal key is a non-literal read (not a bogus undefined-key)", () => {
+    const read = app2.config_reads.find((r) => r.site.includes("readTemplateInterpolated"));
+    expect(read?.reason).toBe("non-literal");
+    expect(read?.key).toBeUndefined();
+    expect(app2.config_uses.some((u) => u.src.includes("readTemplateInterpolated"))).toBe(false);
+  });
+
+  test("a non-interpolated template literal still resolves like a quoted string", () => {
+    const dsts = useDsts("readTemplateLiteral");
+    expect(dsts.some((d) => d.endsWith("@key/PAYMENT_HOST"))).toBe(true);
+  });
+});
+
+const r3 = await analyze(options(3));
+const app3 = r3.application.application;
+
+describe("config_use dataflow tiers (#101 unit C3)", () => {
+  test("an indirect key resolves at -a 3 and carries prov dataflow", () => {
+    const u = app3.config_uses.find((x) => x.src.includes("readIndirect"));
+    expect(u?.dst).toContain("@key/PAYMENT_HOST");
+    expect(u?.prov).toContain("dataflow");
+  });
+
+  test("config_uses is superset-monotonic L2 ⊆ L3", () => {
+    const key = (u: { src: string; dst: string }): string => `${u.src}|${u.dst}`;
+    const l3 = new Set(app3.config_uses.map(key));
+    for (const u of app2.config_uses) expect(l3.has(key(u))).toBe(true);
+  });
+
+  test("config_reads shrinks as levels rise (the deliberate non-monotonic section)", () => {
+    expect(app3.config_reads.length).toBeLessThan(app2.config_reads.length);
+    // a read that never closes on a literal stays unresolved at every level
+    expect(app3.config_reads.some((r) => r.site.includes("readVia"))).toBe(true);
+  });
+
+  test("a reassigned local never widens, even though its initializer is a single literal", () => {
+    // isReassigned must block this: `key`'s initializer IS one literal, but it's also assigned to.
+    expect(app3.config_reads.some((r) => r.site.includes("readReassigned"))).toBe(true);
+    expect(app3.config_uses.some((u) => u.src.includes("readReassigned"))).toBe(false);
+  });
+
+  test("a destructuring reassignment (`({ key } = ...)`) never widens either (fix round 1)", () => {
+    // isReassigned's original identity check missed this: `key` is a binding target nested
+    // inside the assignment's left side, never the whole of it.
+    const read = app3.config_reads.find((r) => r.site.includes("readDestructuredKey"));
+    expect(read?.reason).toBe("non-literal");
+    expect(app3.config_uses.some((u) => u.src.includes("readDestructuredKey"))).toBe(false);
+  });
+});
+
+const r4 = await analyze(options(4));
+const app4 = r4.application.application;
+
+describe("config_use interproc tier (#101 unit C3, -a 4)", () => {
+  test("a parameter resolves once its one resolved caller passes a literal", () => {
+    const u = app4.config_uses.find((x) => x.src.includes("readVia@"));
+    expect(u?.dst).toContain("@key/PAYMENT_HOST");
+    expect(u?.prov).toEqual(["dataflow"]);
+    expect(app4.config_reads.some((r) => r.site.includes("readVia@"))).toBe(false);
+  });
+
+  test("never at -a 3 — the interproc tier is level-gated, not just call-graph-gated", () => {
+    expect(app3.config_uses.some((u) => u.src.includes("readVia@"))).toBe(false);
+  });
+
+  test("disagreeing callers block the interproc tier — a missing edge, not a wrong one", () => {
+    expect(app4.config_uses.some((u) => u.src.includes("readAmbiguous"))).toBe(false);
+    expect(app4.config_reads.some((r) => r.site.includes("readAmbiguous"))).toBe(true);
+  });
+
+  test("a destructuring reassignment still never widens at -a 4 (fix round 1)", () => {
+    const read = app4.config_reads.find((r) => r.site.includes("readDestructuredKey"));
+    expect(read?.reason).toBe("non-literal");
+    expect(app4.config_uses.some((u) => u.src.includes("readDestructuredKey"))).toBe(false);
+  });
+
+  test("config_uses stays superset-monotonic L3 ⊆ L4", () => {
+    const key = (u: { src: string; dst: string }): string => `${u.src}|${u.dst}`;
+    const l4 = new Set(app4.config_uses.map(key));
+    for (const u of app3.config_uses) expect(l4.has(key(u))).toBe(true);
+  });
+});
+
+describe("Neo4j projection of the config layer (#101)", () => {
+  const rows = neoProject(r2.application);
+
+  test("ConfigKey nodes are neutral and hang off their artifact", () => {
+    const id = "can://artifact/artifacts-app/.env@key/PAYMENT_HOST";
+    const n = rows.nodes.find((x) => x.value === id);
+    expect(n?.labels).toContain("ConfigKey");
+    expect(n?.labels).not.toContain("TSConfigKey");
+    expect(rows.edges.some((e) => e.type === "DEFINES_CONFIG" && e.to.value === id)).toBe(true);
+  });
+
+  test("TS_USES_CONFIG carries prov and points at a ConfigKey", () => {
+    const e = rows.edges.find((x) => x.type === "TS_USES_CONFIG");
+    expect(e?.props["prov"]).toEqual(["literal"]);
+    expect(String(e?.to.value)).toContain("@key/");
+  });
+});

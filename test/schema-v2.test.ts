@@ -38,7 +38,6 @@ function options(): AnalysisOptions {
     eager: true,
     noBuild: true,
     phantoms: true,
-    callGraphProvider: "tsc",
     cacheDir: null,
     verbosity: 0,
   };
@@ -88,7 +87,19 @@ describe("schema v2 — L1 envelope", () => {
     expect(v2.schema_version).toBe("2.1.0");
     expect(v2.language).toBe("typescript");
     expect(v2.max_level).toBe(1);
-    expect(Object.keys(root).sort()).toEqual(["call_graph", "id", "kind", "param_in", "param_out", "symbol_table"]);
+    expect(Object.keys(root).sort()).toEqual([
+      "artifacts",
+      "call_graph",
+      "config_reads",
+      "config_uses",
+      "dependencies",
+      "id",
+      "kind",
+      "param_in",
+      "param_out",
+      "symbol_table",
+      "unresolved_imports",
+    ]);
     expect(root.id).toBe("can://typescript/sample-app");
     expect(root.kind).toBe("application");
   });
@@ -246,7 +257,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
     const spy = spyOn(tscProvider, "build");
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l1-guard-"));
     try {
-      const v1L1 = (await analyze({ ...options(), analysisLevel: 1, callGraphProvider: "tsc", cacheDir })).internal;
+      const v1L1 = (await analyze({ ...options(), analysisLevel: 1, cacheDir })).internal;
       expect(spy).not.toHaveBeenCalled();
       expect(v1L1.call_graph).toEqual([]);
       expect(Object.keys(v1L1.external_symbols)).toEqual([]);
@@ -261,7 +272,7 @@ describe("schema v2 — L1 skips the call-graph solve (issue #31)", () => {
     const spy = spyOn(tscProvider, "build");
     const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-v2-l1-guard-l2-"));
     try {
-      const v1L2guard = (await analyze({ ...options(), analysisLevel: 2, callGraphProvider: "tsc", cacheDir })).internal;
+      const v1L2guard = (await analyze({ ...options(), analysisLevel: 2, cacheDir })).internal;
       expect(spy).toHaveBeenCalledTimes(1);
       expect(v1L2guard.call_graph.length).toBeGreaterThan(0);
     } finally {
@@ -701,6 +712,15 @@ function canNodeIds(app: TSAnalysis): Set<string> {
   }
   for (const id of Object.keys(app.application.external_symbols ?? {})) ids.add(id);
   for (const id of Object.keys(app.application.synthesized_callables ?? {})) ids.add(id);
+  // Repository-artifact layer (#101/PR-160 shape): artifacts/packages are NOT CanNodes (own
+  // neutral merge labels) — but TS_PROVIDES / TS_UNRESOLVED_IMPORT mint module-level
+  // :TSExternal ghosts in the CanNode id space.
+  for (const d of app.application.dependencies ?? []) {
+    for (const top of d.provides_imports) ids.add(`${app.application.id}/@external/${top}`);
+  }
+  for (const u of app.application.unresolved_imports ?? []) {
+    ids.add(`${app.application.id}/@external/${u.module}`);
+  }
   return ids;
 }
 
@@ -714,8 +734,13 @@ function resolvesToCount(app: TSAnalysis): number {
 }
 
 describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
-  test("node count: 1 :Application row + every :CanNode id", () => {
-    expect(monoRows.nodes.length).toBe(1 + canNodeIds(monoApp4).size);
+  test("node count: 1 :Application row + every :CanNode id + neutral Artifact/Package/ConfigKey rows", () => {
+    const artifactCount = Object.keys(monoApp4.application.artifacts ?? {}).length;
+    const packageCount = new Set((monoApp4.application.dependencies ?? []).map((d) => d.name)).size;
+    const configKeyCount = new Set(
+      Object.values(monoApp4.application.artifacts ?? {}).flatMap((a) => a.config_keys.map((ck) => ck.id)),
+    ).size;
+    expect(monoRows.nodes.length).toBe(1 + canNodeIds(monoApp4).size + artifactCount + packageCount + configKeyCount);
   });
 
   test("typed overlay relationships match their JSON edge-list length 1:1", () => {
@@ -742,7 +767,11 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
     const containmentEdges = containment.reduce((n, t) => n + relCount(monoRows, t), 0);
     const externalCount = Object.keys(monoApp4.application.external_symbols ?? {}).length;
     const synthCount = Object.keys(monoApp4.application.synthesized_callables ?? {}).length;
-    expect(containmentEdges).toBe(canNodeIds(monoApp4).size - externalCount - synthCount);
+    // minted provides/unresolved ghosts are off-tree CanNodes too (like externals)
+    const ghostIds = new Set<string>();
+    for (const d of monoApp4.application.dependencies ?? []) for (const t of d.provides_imports) ghostIds.add(t);
+    for (const u of monoApp4.application.unresolved_imports ?? []) ghostIds.add(u.module);
+    expect(containmentEdges).toBe(canNodeIds(monoApp4).size - externalCount - synthCount - ghostIds.size);
   });
 
   test("EXTENDS/IMPLEMENTS have no JSON edge-list (extends_ids/implements_ids node props are the source of truth); counts still match 1:1", () => {
@@ -774,10 +803,14 @@ describe("neo4j ↔ json count parity — full depth (issue #27)", () => {
       (n, t) => n + relCount(monoRows, t),
       0,
     );
+    const artifactLayer = [
+      "HAS_ARTIFACT", "DECLARES_DEPENDENCY", "LOCKS", "TS_PROVIDES", "TS_UNRESOLVED_IMPORT",
+      "DEFINES_CONFIG", "TS_USES_CONFIG",
+    ].reduce((n, t) => n + relCount(monoRows, t), 0);
     const resolvesTo = relCount(monoRows, "TS_RESOLVES_TO");
     const heritage = relCount(monoRows, "TS_EXTENDS") + relCount(monoRows, "TS_IMPLEMENTS");
     expect(resolvesTo).toBe(resolvesToCount(monoApp4));
-    expect(typedOverlay + containment + resolvesTo + heritage).toBe(monoRows.edges.length);
+    expect(typedOverlay + containment + artifactLayer + resolvesTo + heritage).toBe(monoRows.edges.length);
   });
 
   test("DDG/CFG_NEXT parity survives the writers: every row keyed, keys fully discriminate (issue #70)", () => {

@@ -11,6 +11,7 @@
  */
 
 import type { TSAnalysis, TSApplication, TSBodyNode, TSCallable, TSField, TSModule, TSType } from "../../schema";
+import { purlNpm } from "../../schema/ids";
 import { SCHEMA_VERSION } from "./schema";
 import { type GraphRows, type NodeRef, type Props, RowBuilder, prune } from "./rows";
 
@@ -64,6 +65,70 @@ export function project(app: TSAnalysis, _appName?: string): GraphRows {
     const modRef = b.node([CAN, "TSModule"], "id", mod.id, moduleProps(mod, fileKey));
     b.edge("TS_HAS_MODULE", appRef, modRef);
     projectScope(b, mod, modRef, fileKey);
+  }
+
+  // Repository-artifact layer (#101, python PR #160 parity): language-NEUTRAL :Artifact and
+  // :Package (purl id) nodes — the deliberate exception to TS-prefixing, so sibling analyzers
+  // MERGE onto the same nodes — plus this analyzer's own claims (TS_PROVIDES /
+  // TS_UNRESOLVED_IMPORT) joining packages into the existing :TSExternal ghost id space.
+  // `source` text stays off the graph (hash + size dereference to it).
+  const importGhost = (name: string): NodeRef =>
+    b.node([CAN, "TSExternal"], "id", `${root.id}/@external/${name}`, prune({
+      id: `${root.id}/@external/${name}`, kind: "external", module: name,
+    }));
+  for (const art of Object.values(root.artifacts ?? {})) {
+    const aRef = b.node(["Artifact"], "id", art.id, prune({
+      id: art.id, kind: "artifact", path: art.path, format: art.format,
+      roles: art.roles.length ? art.roles : null, size_bytes: art.size_bytes,
+      sha256: art.sha256, extraction: art.extraction,
+    }));
+    b.edge("HAS_ARTIFACT", appRef, aRef);
+    for (const ck of art.config_keys) {
+      const kRef = b.node(["ConfigKey"], "id", ck.id, prune({
+        id: ck.id, key: ck.key, namespace: ck.namespace,
+        value: ck.value !== undefined ? String(ck.value) : null,
+        references: ck.references.length ? ck.references : null,
+      }));
+      b.edge("DEFINES_CONFIG", aRef, kRef);
+    }
+  }
+  {
+    const lockIds = Object.values(root.artifacts ?? {})
+      .filter((a) => /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|bun\.lock|yarn\.lock|pnpm-lock\.yaml)$/.test(a.path))
+      .map((a) => a.id)
+      .sort();
+    const seen = new Set<string>();
+    for (const d of root.dependencies ?? []) {
+      const pkgId = purlNpm(d.name);
+      const pkgRef = b.node(["Package"], "id", pkgId, prune({ id: pkgId, ecosystem: "npm", name: d.name }));
+      b.edge("DECLARES_DEPENDENCY", { label: "Artifact", keyProp: "id", value: d.declared_in }, pkgRef, prune({
+        spec: d.spec || null, kind: d.kind, direct: d.direct, extras: d.extras.length ? d.extras : null,
+        prov: d.prov.length ? d.prov : null,
+      }), d.kind);
+      if (d.locked_version) {
+        for (const lockId of lockIds) {
+          const k = `LOCKS\0${lockId}\0${pkgId}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          b.edge("LOCKS", { label: "Artifact", keyProp: "id", value: lockId }, pkgRef, prune({ version: d.locked_version }));
+        }
+      }
+      for (const top of d.provides_imports) {
+        const k = `PROV\0${pkgId}\0${top}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        b.edge("TS_PROVIDES", pkgRef, importGhost(top));
+      }
+    }
+    for (const u of root.unresolved_imports ?? []) {
+      b.edge("TS_UNRESOLVED_IMPORT", appRef, importGhost(u.module), prune({ prov: u.prov.length ? u.prov : null }));
+    }
+  }
+  // config_use literal/dataflow tier (#101 unit C2/C3): src is a body-node ordinal id already
+  // projected as a :CanNode above; dst is a :ConfigKey id, already projected in the artifact
+  // loop. config_reads stay JSON-only — they record absence, not an edge.
+  for (const u of root.config_uses ?? []) {
+    b.edge("TS_USES_CONFIG", ref(u.src), { label: "ConfigKey", keyProp: "id", value: u.dst }, prune({ prov: u.prov }));
   }
 
   // External library targets (shared nodes — no _module).

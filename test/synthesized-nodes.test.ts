@@ -13,7 +13,10 @@ const ANON = "src/x.foo:<3:10>";
 const SPAN: TSSpan = { start: [1, 1], end: [5, 1], bytes: [0, 10] };
 
 const callable = (signature: string, name: string): TSCallable =>
-  ({ signature, name, kind: "function", span: SPAN, parameters: [], call_sites: [], inner_callables: {}, inner_classes: {} }) as unknown as TSCallable;
+  ({
+    signature, name, kind: "function", span: SPAN, parameters: [],
+    call_sites: [], config_accesses: [], inner_callables: {}, inner_classes: {},
+  }) as unknown as TSCallable;
 
 const app: AnalysisInternal = {
   symbol_table: {
@@ -23,7 +26,7 @@ const app: AnalysisInternal = {
       classes: {}, interfaces: {}, enums: {}, type_aliases: {}, namespaces: {}, variables: [],
     } as unknown as TSModule,
   },
-  call_graph: [{ source: "src/x.foo", target: ANON, type: CALL_DEP, weight: 1, provenance: ["jelly"], tags: {} }],
+  call_graph: [{ source: "src/x.foo", target: ANON, type: CALL_DEP, weight: 1, provenance: ["defuse"], tags: {} }],
   external_symbols: {},
   synthesized_callables: { [ANON]: { name: "<anonymous>", path: "src/x.ts", start_line: 3, start_column: 10 } },
 };

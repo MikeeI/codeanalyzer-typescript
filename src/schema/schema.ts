@@ -16,8 +16,8 @@
  *  - `id` fields are stamped per-run by `assignIds` (ids embed `--app-name`; the cached tree must
  *    stay app-name-free). Builders initialize them to "".
  *  - INTERNAL fields (never on the wire; serialize.ts strips them by key): `call_sites`,
- *    `abs_path`, `content_hash`, `last_modified`, `file_size`. They exist for the call-graph
- *    resolver, the dataflow join, and the analysis cache.
+ *    `config_accesses`, `abs_path`, `content_hash`, `last_modified`, `file_size`. They exist for
+ *    the call-graph resolver, the dataflow join, and the analysis cache.
  *
  * All field names are snake_case so `JSON.stringify` emits keys the SDK Pydantic models parse.
  */
@@ -124,6 +124,7 @@ export interface TSCallsite {
   receiver_expr?: string;
   receiver_type?: string;
   argument_types: string[];
+  arguments: string[]; // raw source text per argument — INTERNAL, feeds the config-use key match
   type_arguments: string[]; // explicit call type args, foo<T>()
   return_type?: string;
   callee_signature?: string; // absent when recorded; backfilled by the resolver call graph
@@ -136,13 +137,26 @@ export interface TSCallsite {
   bytes: [number, number]; // char offsets [start, end] into module.source
 }
 
+/** INTERNAL — a recognized configuration read (env root access). Never on the wire; the wire's
+ * view is the `config_access` node in the owning callable's `body{}` (built by the l1Body pass). */
+export interface TSConfigAccess {
+  root: string; // "process.env" | "import.meta.env" | "Bun.env"
+  key?: string; // present when statically known
+  start_line: number;
+  start_column: number;
+  end_line: number;
+  end_column: number;
+  bytes: [number, number];
+}
+
 // ----------------------------------------------------------------------------------------------
 // Body nodes — a callable's `body{}` map, keyed by local id (`line:col`, or `@tag` synthetic).
-// L1: `call` nodes; L3 adds statements + @entry/@exit; L4 adds formal/actual param vertices.
+// L1: `call` and `config_access` nodes; L3 adds statements + @entry/@exit; L4 adds formal/actual
+// param vertices.
 // ----------------------------------------------------------------------------------------------
 
 export interface TSBodyNode {
-  kind: string; // "call" | "statement" | "entry" | "exit" | "formal_in" | "actual_in" | …
+  kind: string; // "call" | "config_access" | "statement" | "entry" | "exit" | "formal_in" | "actual_in" | …
   span?: TSSpan;
   callee?: string | null; // `call` nodes: null at L1, refined to an id at L2 (the one sanctioned null)
   of?: string; // synthetic param vertices: the flowed name ("arg0", "$ret", a global path)
@@ -156,6 +170,9 @@ export interface TSBodyNode {
   return_type?: string;
   is_constructor_call?: boolean;
   is_optional_chain?: boolean;
+  // config_access attributes (copied from the recorded access by the l1Body pass)
+  root?: string;
+  key?: string;
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -258,6 +275,7 @@ export interface TSCallable {
   // INTERNAL (stripped from the wire)
   abs_path: string; // ABSOLUTE file path of the declaration — the resolver's AST-index key
   call_sites: TSCallsite[];
+  config_accesses: TSConfigAccess[]; // INTERNAL (stripped from the wire)
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -325,6 +343,90 @@ export interface TSModule {
 }
 
 // ----------------------------------------------------------------------------------------------
+// Repository-artifact layer (#101; parity with codeanalyzer-python PR #160 / spec
+// 2026-08-27-artifacts-and-dependencies-design.md): recognized non-code files as nodes with
+// LANGUAGE-NEUTRAL ids, plus evidence-tagged dependency records and the unresolved-import
+// hygiene signal. Application-anchored, level-free — identical at every -a level. Capture is
+// broad (every rules-matched file becomes a node, verbatim source, unbounded by decision);
+// extraction is narrow (only dependency-manifest roles feed `dependencies` this unit).
+// ----------------------------------------------------------------------------------------------
+
+/** A configuration key flattened out of a config-bearing artifact (#101 unit B). */
+export interface TSConfigKey {
+  id: string; // `${artifactId}@key/${dotted}` — stamped per-run by assignIds
+  key: string; // dotted path; numeric segments for arrays ("services.web.ports.0")
+  namespace: string; // env|json|yaml|toml|ini|properties|dockerfile
+  value?: string | number | boolean; // present by default; absent under --no-artifact-text
+  span?: TSSpan; // best-effort: exact for yaml (the parser retains node positions);
+  // line-based for env/ini/dockerfile; ABSENT for json/jsonc — JSON.parse discards
+  // source positions, and re-deriving one by searching the text for the key token would
+  // point at the wrong occurrence whenever a key name repeats under different parents
+  // (routine in tsconfig/compose). Absent is honest; a wrong span is a lie a consumer would act on.
+  references: string[]; // recognized ${VAR}/$VAR tokens, deduped, in order
+}
+
+/** A recognized non-code file (config, manifest, CI, container spec). */
+export interface TSArtifact {
+  id: string; // can://artifact/<app>/<path> — language-NEUTRAL namespace, stamped per-run
+  kind: "artifact";
+  path: string; // repo-relative POSIX path (also the map key)
+  format: string; // json | jsonc | yaml | toml | ini | requirements? | dockerfile | yarnlock | text | env | binary
+  roles: string[]; // dependency-manifest | tool-config | container-image | service-topology | ci | env | packaging | legal | docs | script | unknown
+  size_bytes: number;
+  sha256: string;
+  source: string; // verbatim, unbounded by decision (spec §3)
+  text_truncated: boolean; // true when `source` is a prefix, not the full file
+  extraction: "none" | "partial" | "full";
+  config_keys: TSConfigKey[]; // contained children; containment mirrors DEFINES_CONFIG
+}
+
+/** One third-party dependency (declared or lockfile-only transitive), evidence-tagged via `prov`. */
+export interface TSDependency {
+  name: string; // npm-native, @scope kept
+  spec: string; // as declared ("^4.17.21"); "" when the section value is not a string
+  kind: "runtime" | "dev" | "optional" | "peer" | "build"; // `peer` is the spec'd additive npm token
+  extras: string[]; // npm has none — always [] (shared shape parity)
+  declared_in: string; // TSArtifact id (a manifest for direct:true, the lock for direct:false)
+  direct: boolean; // false = lockfile-only transitive (no manifest declares it)
+  locked_version?: string;
+  provides_imports: string[]; // import specifiers this distribution provides (npm: the name; @types/x: x)
+  prov: string[]; // declared | lockfile | installed-metadata | heuristic
+}
+
+/** A non-relative import no declared dependency accounts for (the dependency-hygiene signal). */
+export interface TSImportBinding {
+  module: string; // the specifier root ("express", "@scope/pkg")
+  bound_to?: string; // best-effort distribution name when partially bound
+  prov: string[];
+}
+
+// ----------------------------------------------------------------------------------------------
+// config_use literal tier (#101 unit C2/C3): joins a recognized config READ (a `config_access` or
+// detector-table CALL body node) to the declared `TSConfigKey`(s) it names. Runs with the L2 stage
+// (src/semantic_analysis/configUse.ts) because CALL rules need the resolved call graph. `src`/
+// `site` are GLOBAL ordinal ids (`<callable-id>@<local>`); `dst` is a TSConfigKey id.
+// ----------------------------------------------------------------------------------------------
+
+/** One resolved config read: a recognized read whose key closed on exactly one literal that
+ * matches a declared ConfigKey. `src` is the read's GLOBAL ordinal id; `dst` the key's id. */
+export interface TSConfigUse {
+  src: string;
+  dst: string;
+  prov: Array<"literal" | "dataflow">;
+}
+
+/** A recognized read that resolved to no declared key — first class, so an untraceable read is
+ * as visible as a traced one. `config_reads` SHRINKS as levels rise (higher tiers resolve some);
+ * that is deliberate and is the layer's one non-monotonic section. */
+export interface TSConfigRead {
+  site: string; // GLOBAL ordinal id
+  callee: string; // the read root ("process.env") or the resolved callee id for call rules
+  key?: string; // set only for reason "undefined-key"
+  reason: "non-literal" | "undefined-key";
+  prov: Array<"literal" | "dataflow">;
+}
+
+// ----------------------------------------------------------------------------------------------
 // Call-graph edge (identity-only, provider output; endpoints are signature strings until the
 // call-graph-ids pass rewrites them onto can:// ids at L2)
 // ----------------------------------------------------------------------------------------------
@@ -354,10 +456,10 @@ export interface TSExternalSymbol {
   module: string; // the import/require specifier, e.g. "node:fs", "express", "@scope/pkg"
 }
 
-// A first-party anonymous callback that Jelly resolves as a call-graph endpoint but the symbol
-// table never names (the canonicalizer returns null for anonymous functions). The map key IS the
-// synthesized signature `<nearest-named-enclosing-signature>:<line:col>`, so an edge `source`/
-// `target` byte-matches it just like a real `Callable.signature` or `TSExternalSymbol.signature`.
+// A first-party anonymous callback a call-graph builder resolved as an edge endpoint but could
+// not name against the symbol table (a residual-fallback safety net; since 2.1.0 the tree names
+// anonymous callables positionally, so this map is normally empty). The map key IS the
+// synthesized signature, so an edge `source`/`target` byte-matches it like a real signature.
 export interface TSSynthesizedCallable {
   name: string; // display name — always "<anonymous>"; the signature carries the precise identity
   path: string; // owning module key (project-relative POSIX path WITH extension)
@@ -375,6 +477,13 @@ export interface AnalysisInternal {
   call_graph: TSCallEdge[];
   external_symbols: Record<string, TSExternalSymbol>;
   synthesized_callables: Record<string, TSSynthesizedCallable>;
+  /** Repository-artifact layer (level-free). */
+  artifacts?: Record<string, TSArtifact>;
+  dependencies?: TSDependency[];
+  unresolved_imports?: TSImportBinding[];
+  /** config_use literal tier (#101 unit C2/C3) — stamped by finalizeAnalysis, not by core.ts. */
+  config_uses?: TSConfigUse[];
+  config_reads?: TSConfigRead[];
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -405,6 +514,13 @@ export interface TSApplication {
   call_graph: TSCallGraphEdge[]; // L2 — callable → callable (empty at L1)
   param_in: TSParamEdge[]; // L4 (empty until L4)
   param_out: TSParamEdge[]; // L4
+  /** Repository-artifact layer — identical at every level (#101, python PR #160 parity). */
+  artifacts: Record<string, TSArtifact>;
+  dependencies: TSDependency[];
+  unresolved_imports: TSImportBinding[];
+  /** config_use literal tier (#101 unit C2/C3) — empty until L2; CALL rules need the call graph. */
+  config_uses: TSConfigUse[];
+  config_reads: TSConfigRead[];
   // TS-additive (parity): edge endpoints outside the containment tree need an id home.
   external_symbols?: Record<string, import("./homing").TSExternalNode>; // L2 — library call targets, keyed by id
   // L2 — 2.1.0 compatibility index: pre-2.1.0 anonymous-callable id → the tree id that replaced
@@ -417,7 +533,7 @@ export interface TSApplication {
 export interface TSCallGraphEdge {
   src: string;
   dst: string;
-  prov: string[]; // provenance, e.g. ["tsc"], ["jelly"]
+  prov: string[]; // provenance, e.g. ["tsc"], ["defuse"], ["import"]
   weight: number;
 }
 

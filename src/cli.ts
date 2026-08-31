@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { Command, Option } from "commander";
-import type { AnalysisOptions, CallGraphProviderName, EmitTarget } from "./options";
+import type { AnalysisOptions, EmitTarget } from "./options";
+import { DEFAULT_ARTIFACT_TEXT_MAX_BYTES } from "./options";
 import { ALL_GRAPHS, type GraphSelector } from "./schema";
 
 /**
@@ -57,12 +58,13 @@ export function buildProgram(): Command {
     .option("--lazy", "reuse the cache (default)")
     .option("--no-build", "skip dependency materialization (use a prepared node_modules)")
     .option("--no-phantoms", "disable phantom (external) nodes for imported/required library calls")
+    .option("--resolve-installed", "probe node_modules metadata for import→package binding (default: repo files only)")
+    .option("--no-artifact-text", "keep the artifact inventory but drop captured raw text")
     .option(
-      "--call-graph-provider <name>",
-      "call-graph backend: union (default, tsc ∪ jelly) | tsc | jelly | both (deprecated alias of union)",
-      "union",
+      "--artifact-text-max-bytes <n>",
+      "per-file byte cap for captured artifact text; larger files are truncated and flagged",
+      String(DEFAULT_ARTIFACT_TEXT_MAX_BYTES),
     )
-    .option("--tsc-only", "use the tsc resolver only — opt out of Jelly edges (overrides --call-graph-provider)")
     .option("-c, --cache-dir <dir>", "cache/intermediate directory")
     .option("-v, --verbose", "increase verbosity (repeatable)", (_v: string, prev: number) => prev + 1, 0)
     .allowExcessArguments(true);
@@ -137,23 +139,6 @@ export function parseArgs(argv: string[]): AnalysisOptions {
   if (emit !== "schema" && !o.input) program.error("required option '-i, --input <path>' not specified");
   const targets: string[] | null =
     Array.isArray(o.targetFiles) && o.targetFiles.length ? o.targetFiles.map(String) : null;
-  // --tsc-only is the forced opt-out: it wins over --call-graph-provider. Otherwise `both` is a
-  // deprecated alias of `union` (warn, but honor it); unknown values fall back to the union default.
-  let cgProvider: CallGraphProviderName;
-  if (o.tscOnly) {
-    cgProvider = "tsc";
-  } else if (o.callGraphProvider === "tsc") {
-    cgProvider = "tsc";
-  } else if (o.callGraphProvider === "jelly") {
-    cgProvider = "jelly";
-  } else {
-    if (o.callGraphProvider === "both") {
-      // stderr only — stdout may carry compact JSON when -o is omitted.
-      console.error("warning: --call-graph-provider both is deprecated; it now behaves as 'union' (tsc ∪ jelly).");
-    }
-    cgProvider = "union";
-  }
-
   return {
     input: o.input ? path.resolve(String(o.input)) : "",
     output: o.output ? path.resolve(String(o.output)) : null,
@@ -173,7 +158,17 @@ export function parseArgs(argv: string[]): AnalysisOptions {
     // commander maps --no-build / --no-phantoms to opts.build/phantoms === false
     noBuild: o.build === false,
     phantoms: o.phantoms !== false,
-    callGraphProvider: cgProvider,
+    resolveInstalled: Boolean(o.resolveInstalled),
+    artifactText: o.artifactText !== false,
+    // Malformed input (e.g. "abc") must fall back, not silently disable truncation via NaN --
+    // every `> cap` comparison against NaN is false.
+    artifactTextMaxBytes: (() => {
+      // An empty value is malformed too -- Number("") is 0, which would cap every
+      // artifact's text at zero bytes. An explicit 0 still means exactly that.
+      const raw = String(o.artifactTextMaxBytes ?? "").trim();
+      const n = raw === "" ? NaN : Number(raw);
+      return Number.isFinite(n) && n >= 0 ? n : DEFAULT_ARTIFACT_TEXT_MAX_BYTES;
+    })(),
     cacheDir: o.cacheDir ? path.resolve(String(o.cacheDir)) : null,
     verbosity: typeof o.verbose === "number" ? o.verbose : 0,
   };

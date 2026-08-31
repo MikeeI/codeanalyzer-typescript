@@ -6,6 +6,7 @@
  */
 import { Node } from "ts-morph";
 import { fileKeyOf, signatureOf, constructorSignatureOf } from "./schema";
+import { aliasedSymbolOf, symbolAt } from "./checker";
 
 /** The name a node contributes to a signature's dotted member chain, or null if it contributes none. */
 export function contributorName(node: Node): string | null {
@@ -29,7 +30,7 @@ export function contributorName(node: Node): string | null {
 
 /**
  * The segment an unnamed function-like node contributes. Position is the only discriminant a
- * nameless callable has, and it is the one both the resolver and Jelly can compute independently
+ * nameless callable has, and it is the one every call-graph builder can compute independently
  * — which is what keeps caller-side and callee-side ids byte-identical. Angle brackets mark the
  * segment synthetic (the `<init>`/`<clinit>` convention). It joins the dotted chain, so an
  * anonymous callable lives in the durable id tier and never collides with the `@line:col`
@@ -82,16 +83,16 @@ export function computeSignatureForDecl(node: Node, root: string): string | null
   return signatureOf(modulePrefix, ...parts);
 }
 
-/** Resolve the declaration a call/new expression targets, following import aliases. */
+/** Resolve the declaration a call/new/tagged-template expression targets, following import aliases. */
 export function resolveCalleeDecl(call: Node): Node | undefined {
-  if (!Node.isCallExpression(call) && !Node.isNewExpression(call)) return undefined;
-  const expr = call.getExpression();
+  if (!Node.isCallExpression(call) && !Node.isNewExpression(call) && !Node.isTaggedTemplateExpression(call)) return undefined;
+  const expr = Node.isTaggedTemplateExpression(call) ? call.getTag() : call.getExpression();
   let symNode: Node = expr;
   if (Node.isPropertyAccessExpression(expr)) symNode = expr.getNameNode();
   else if (Node.isElementAccessExpression(expr)) return undefined; // dynamic dispatch — best-effort skip
-  let sym = symNode.getSymbol();
+  let sym = symbolAt(symNode);
   if (!sym) return undefined;
-  const aliased = sym.getAliasedSymbol();
+  const aliased = aliasedSymbolOf(sym);
   if (aliased) sym = aliased;
   const decls = sym.getDeclarations();
   return decls && decls.length ? decls[0] : undefined;
