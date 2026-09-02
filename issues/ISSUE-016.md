@@ -1,6 +1,6 @@
 # ISSUE-016 — artifacts: Docker ENV parsing loses valid assignments
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -52,24 +52,26 @@ Support modern ENV pairs, legacy single ENV values, and bare or assigned ARG nam
 
 ## Publication-Blockers
 
-- Implementation, focused checks, commit, push, and final draft approval remain pending.
+- Final approval of the exact current pull request draft remains pending.
 
 ## Next-Action
 
-Summary: Parse Docker assignments
-Action: Implement logical Docker directives on `fix/issue-016`.
-Done-When: Focused artifact parser tests and typecheck pass.
+Summary: Approve pull request
+Action: Approve the exact current Publication-Draft for upstream submission.
+Done-When: The pull request is authorized for publication.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-016
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Correct Docker ENV and ARG extraction for valid multi-line assignments.
-Commit: Pending.
-Push: Pending.
+Commit: `654f665`
+Push: `origin/fix/issue-016`
 Checks:
 
-- Pending.
+- `bun test test/config-keys.test.ts`: passed.
+- `bun test`: passed with 239 tests and 6 opt-in skips.
+- `bun run typecheck`: passed.
 
 ## Publication-Draft
 
@@ -100,16 +102,20 @@ Preserve every valid assignment without evaluating build-time variables.
 
 ## Verification
 
-- `bun test test/artifacts.test.ts`
+- `bun test test/config-keys.test.ts`
+- `bun test`
 - `bun run typecheck`
 
 I checked the relevant issues, comments, pull requests, and discussions; this pull request is not a duplicate.
 
 ### Disclosure
 
-Investigated thoroughly with GPT-5.6 (extra high reasoning effort), using [Oh My Pi](https://github.com/can1357/oh-my-pi) as the agent framework.
+Investigated thoroughly with GPT-5.6 at extra-high reasoning effort.
+I used [Oh My Pi](https://github.com/can1357/oh-my-pi) as the agent framework.
 This report is not generic or unreviewed AI-generated output.
-Its claims were checked against the cited evidence, and it includes the relevant detail intended to help maintainers resolve the issue.
-If reports like this are not useful to the project, please let me know and I will refrain from submitting similar ones.
+Its claims were checked against the cited evidence.
+It includes the relevant detail intended to help maintainers resolve the issue.
+If reports like this are not useful to the project, please let me know.
+I will refrain from submitting similar reports.
 My intent is to help without wasting maintainer time or energy or discouraging their work.
 Thank you for your work.

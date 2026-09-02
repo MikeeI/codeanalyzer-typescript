@@ -1,6 +1,6 @@
 # ISSUE-014 — cache: semantic modules outlive their compiler context
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -53,24 +53,26 @@ Rebuild every module in a program when its source or effective compiler input ch
 
 ## Publication-Blockers
 
-- Implementation, focused checks, commit, push, and final draft approval remain pending.
+- Final approval of the exact current pull request draft remains pending.
 
 ## Next-Action
 
-Summary: Validate semantic cache
-Action: Implement program-context cache validity on `fix/issue-014`.
-Done-When: Warm-cache semantic regressions and typecheck pass.
+Summary: Approve pull request
+Action: Approve the exact current Publication-Draft for upstream submission.
+Done-When: The pull request is authorized for publication.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-014
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Prevent cached checker semantics and resolver provenance from surviving context changes.
-Commit: Pending.
-Push: Pending.
+Commit: `435e446`
+Push: `origin/fix/issue-014`
 Checks:
 
-- Pending.
+- `bun test test/l1-body-cache-shape.test.ts`: passed.
+- `bun test`: passed with 239 tests and 6 opt-in skips.
+- `bun run typecheck`: passed.
 
 ## Publication-Draft
 
@@ -101,17 +103,20 @@ Prevent resolver provenance from being serialized as reusable source structure.
 
 ## Verification
 
-- `bun test test/l1-body-cache-shape.test.ts test/external-resolution.test.ts`
+- `bun test test/l1-body-cache-shape.test.ts`
+- `bun test`
 - `bun run typecheck`
-- Warm-versus-eager comparisons after source and compiler-context changes.
 
 I checked the relevant issues, comments, pull requests, and discussions; this pull request is not a duplicate.
 
 ### Disclosure
 
-Investigated thoroughly with GPT-5.6 (extra high reasoning effort), using [Oh My Pi](https://github.com/can1357/oh-my-pi) as the agent framework.
+Investigated thoroughly with GPT-5.6 at extra-high reasoning effort.
+I used [Oh My Pi](https://github.com/can1357/oh-my-pi) as the agent framework.
 This report is not generic or unreviewed AI-generated output.
-Its claims were checked against the cited evidence, and it includes the relevant detail intended to help maintainers resolve the issue.
-If reports like this are not useful to the project, please let me know and I will refrain from submitting similar ones.
+Its claims were checked against the cited evidence.
+It includes the relevant detail intended to help maintainers resolve the issue.
+If reports like this are not useful to the project, please let me know.
+I will refrain from submitting similar reports.
 My intent is to help without wasting maintainer time or energy or discouraging their work.
 Thank you for your work.

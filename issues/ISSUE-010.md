@@ -1,6 +1,6 @@
 # ISSUE-010 — dataflow: non-CFG selectors suppress requested graph output
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -51,24 +51,26 @@ Apply selectors only when writing the callable's public graph fields.
 
 ## Publication-Blockers
 
-- Implementation, focused checks, commit, push, and final draft approval remain pending.
+- Final approval of the exact current pull request draft remains pending.
 
 ## Next-Action
 
-Summary: Separate graph attachment
-Action: Implement selector-independent attachment substrate on `fix/issue-010`.
-Done-When: Individual selector regressions and typecheck pass.
+Summary: Approve pull request
+Action: Approve the exact current Publication-Draft for upstream submission.
+Done-When: The pull request is authorized for publication.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-010
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Attach selected dataflow projections without requiring visible CFG output.
-Commit: Pending.
-Push: Pending.
+Commit: `fd5d5d5`
+Push: `origin/fix/issue-010`
 Checks:
 
-- Pending.
+- `bun test test/dataflow.test.ts`: passed.
+- `bun test`: passed with 238 tests and 6 opt-in skips.
+- `bun run typecheck`: passed.
 
 ## Publication-Draft
 
@@ -99,16 +101,20 @@ Apply graph selectors at the public attachment boundary.
 
 ## Verification
 
-- `bun test test/dataflow.test.ts test/cli-options.test.ts`
+- `bun test test/dataflow.test.ts`
+- `bun test`
 - `bun run typecheck`
 
 I checked the relevant issues, comments, pull requests, and discussions; this pull request is not a duplicate.
 
 ### Disclosure
 
-Investigated thoroughly with GPT-5.6 (extra high reasoning effort), using [Oh My Pi](https://github.com/can1357/oh-my-pi) as the agent framework.
+Investigated thoroughly with GPT-5.6 at extra-high reasoning effort.
+I used [Oh My Pi](https://github.com/can1357/oh-my-pi) as the agent framework.
 This report is not generic or unreviewed AI-generated output.
-Its claims were checked against the cited evidence, and it includes the relevant detail intended to help maintainers resolve the issue.
-If reports like this are not useful to the project, please let me know and I will refrain from submitting similar ones.
+Its claims were checked against the cited evidence.
+It includes the relevant detail intended to help maintainers resolve the issue.
+If reports like this are not useful to the project, please let me know.
+I will refrain from submitting similar reports.
 My intent is to help without wasting maintainer time or energy or discouraging their work.
 Thank you for your work.
