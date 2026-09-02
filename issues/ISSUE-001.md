@@ -71,9 +71,9 @@ None.
 
 ## Next-Action
 
-Summary: Monitor upstream review
-Action: Monitor pull request #120 for CI results or maintainer feedback.
-Done-When: The pull request state changes or actionable feedback arrives.
+Summary: Await workflow approval
+Action: Await maintainer approval for GitHub Actions run 33626458308 on pull request #120.
+Done-When: The CI run starts or reaches a test conclusion.
 
 ## Pull-Request-Implementation
 
