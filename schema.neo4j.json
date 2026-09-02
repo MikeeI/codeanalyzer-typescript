@@ -30,8 +30,7 @@
         "size_bytes": "integer",
         "sha256": "string",
         "extraction": "string",
-        "source": "string",
-        "text_truncated": "boolean"
+        "source": "string"
       }
     },
     {
