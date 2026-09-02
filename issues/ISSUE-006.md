@@ -1,6 +1,6 @@
 # ISSUE-006 — artifacts: unmatched text files decode twice
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -50,39 +50,41 @@ Decode a non-binary artifact once and reuse that string for unmatched classifica
 
 ## Verification
 
-- `bun test test/artifacts.test.ts` → existing artifact inventory, unknown, binary, hash, and truncation contracts pass.
-- Before and after fixture analysis → artifact records are byte-identical.
-- Synthetic 16 MiB artifact measurement → repeated baseline and candidate timings recorded.
+- `bun test test/artifacts.test.ts` → 18 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Five baseline and candidate inventory outputs matched byte for byte.
 
 ## Performance-Evidence
 
 Workload: One synthetic unmatched 16 MiB ASCII artifact under Bun 1.4.0 on Linux x86_64.
-Baseline [O]: Repeated decode samples were 30, 24, 23, 22, and 23 ms.
-Candidate [O]: One-decode prototype samples were 17, 16, 16, 17, and 16 ms.
-Guard [O]: Stored and truncated text matched exactly.
-Boundary: The benchmark isolates decode work; filesystem read, hash, classification, and parsing costs are excluded.
+Baseline [O]: Full inventory samples took 35.0–43.1 ms with a 36.3 ms median.
+Candidate [O]: Single-decode inventory samples took 28.3–31.7 ms with a 29.0 ms median.
+Guard [O]: Every artifact record matched byte for byte.
+Boundary: The measurement covers one-file inventory, including read, hash, classification, and truncation.
 End-to-end-Measurement: Not measured
 
 ## Publication-Blockers
 
-- Implementation, focused checks, exact pull-request draft, and final approval of that draft and target remain pending.
+- Final user approval of the exact pull-request draft and target remains pending.
 
 ## Next-Action
 
-Summary: Reuse artifact text decode
-Action: Reuse one decoded value on `fix/issue-006` without changing artifact semantics.
-Done-When: Focused tests, exact record comparison, and candidate measurement pass.
+Summary: Approve exact PR draft
+Action: Approve the exact draft and target for publication.
+Done-When: The user approves this exact pull-request draft and target.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-006
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Decode each non-binary artifact once within inventory collection.
-Commit: Pending.
-Push: Pending.
+Commit: `422db111855f0e3accd041c33cc342ae4f4d4e7d`
+Push: `origin/fix/issue-006`
 Checks:
 
-- Pending.
+- `bun test test/artifacts.test.ts` → 18 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Five baseline and candidate inventory outputs matched byte for byte.
 
 ## Publication-Draft
 
@@ -98,14 +100,14 @@ Body:
 
 ## Evidence
 
-- Repeated 16 MiB decode samples took 22–30 ms.
-- One-decode samples took 16–17 ms and produced identical stored text.
+- Full 16 MiB inventory samples took 35.0–43.1 ms.
+- Single-decode samples took 28.3–31.7 ms with byte-identical artifact records.
 
 ## Validation
 
 - `bun test test/artifacts.test.ts`
 - `bun run typecheck`
-- Exact artifact-record comparison and repeated 16 MiB timing samples.
+- Five exact artifact-record comparisons and repeated 16 MiB timings.
 
 ## Prior art
 

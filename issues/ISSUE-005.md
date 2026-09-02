@@ -1,6 +1,6 @@
 # ISSUE-005 — dataflow: throwability scans each subtree up to four times
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -49,39 +49,41 @@ Replace the four `containsKind` calls in `mayThrow` with one root-aware traversa
 
 ## Verification
 
-- `bun test test/dataflow.test.ts` → existing CFG, exception, and dataflow contracts pass.
-- Before and after self-analysis → every statement's `mayThrow` result remains identical.
-- Isolated statement measurement → baseline and candidate timings recorded with repeated samples.
+- `bun test test/dataflow.test.ts` → 39 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Baseline and candidate returned identical booleans for all 5,965 statements.
 
 ## Performance-Evidence
 
-Workload: 5,308 statements from this repository's parsed source tree.
-Baseline [O]: Four-scan `mayThrow` evaluation took 74 ms.
-Candidate [O]: One-scan prototype took 39 ms.
-Guard [O]: All 5,308 booleans matched exactly.
+Workload: 5,965 statements from this repository's parsed source tree.
+Baseline [O]: Four-scan samples took 79.5–116.7 ms with a 102.2 ms median.
+Candidate [O]: One-scan samples took 43.5–57.0 ms with a 52.1 ms median.
+Guard [O]: All 5,965 booleans matched exactly.
 Boundary: The measurement isolates the predicate; end-to-end CFG improvement remains unmeasured.
 End-to-end-Measurement: Not measured
 
 ## Publication-Blockers
 
-- Implementation, focused checks, exact pull-request draft, and final approval of that draft and target remain pending.
+- Final user approval of the exact pull-request draft and target remains pending.
 
 ## Next-Action
 
-Summary: Unify throwability scan
-Action: Implement the one-pass predicate on `fix/issue-005` without changing other CFG scans.
-Done-When: Focused tests, exact boolean comparison, and candidate measurement pass.
+Summary: Approve exact PR draft
+Action: Approve the exact draft and target for publication.
+Done-When: The user approves this exact pull-request draft and target.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-005
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Combine only the four syntax-kind traversals inside `mayThrow`.
-Commit: Pending.
-Push: Pending.
+Commit: `5bc3e865c892096633ee4fb633f690f28af05786`
+Push: `origin/fix/issue-005`
 Checks:
 
-- Pending.
+- `bun test test/dataflow.test.ts` → 39 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Baseline and candidate returned identical booleans for all 5,965 statements.
 
 ## Publication-Draft
 
@@ -97,14 +99,14 @@ Body:
 
 ## Evidence
 
-- Four scans over 5,308 self-analysis statements took 74 ms.
-- One equivalent scan took 39 ms and returned identical booleans.
+- Four-scan samples took 79.5–116.7 ms with a 102.2 ms median.
+- One-scan samples took 43.5–57.0 ms with a 52.1 ms median and identical booleans.
 
 ## Validation
 
 - `bun test test/dataflow.test.ts`
 - `bun run typecheck`
-- Exact `mayThrow` comparison for all self-analysis statements.
+- Exact `mayThrow` comparison for all 5,965 self-analysis statements.
 
 ## Prior art
 

@@ -1,6 +1,6 @@
 # ISSUE-003 — call graph: both resolvers rebuild the same AST index
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -51,39 +51,41 @@ Keep signature-set construction local because its measured cost is negligible.
 
 ## Verification
 
-- `bun test test/external-resolution.test.ts test/dataflow.test.ts` → resolver and graph contracts pass.
-- Before and after self-analysis → call edges, weights, tags, phantoms, and resolutions are byte-identical.
-- Self-analysis Level-2 measurement → resolver and end-to-end times recorded.
+- `bun test test/external-resolution.test.ts test/dataflow.test.ts test/schema-v2.test.ts` → 92 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Three alternating Level-2 comparisons produced byte-identical application JSON.
 
 ## Performance-Evidence
 
-Workload: Eight self-analysis programs containing 3,023 call-like AST nodes.
-Baseline [O]: First and second index construction took 103 ms and 101 ms.
-Candidate [O]: Pending implementation measurement.
-Guard [O]: Pending exact resolver-output comparison.
-Boundary: Only the duplicate AST traversal is removed; checker and linker work remain unchanged.
-End-to-end-Measurement: Not measured
+Workload: Eight programs containing 3,022 call-like AST nodes under Bun 1.4.0 on Linux x86_64.
+Baseline [O]: The two former index passes took 103 ms and 101 ms.
+Candidate [O]: One shared index pass took 97.6–119.0 ms across five samples.
+Guard [O]: Three baseline and candidate Level-2 outputs matched byte for byte.
+Boundary: Checker and linker work remain unchanged; alternating end-to-end timings had material variance.
+End-to-end-Measurement: Baseline 1,034.2–1,201.4 ms; candidate 971.6–1,115.7 ms.
 
 ## Publication-Blockers
 
-- Implementation, focused checks, exact pull-request draft, and final approval of that draft and target remain pending.
+- Final user approval of the exact pull-request draft and target remains pending.
 
 ## Next-Action
 
-Summary: Share resolver AST index
-Action: Implement per-context index reuse on `fix/issue-003` without changing resolver behavior.
-Done-When: Focused tests, exact output comparison, and candidate measurement pass.
+Summary: Approve exact PR draft
+Action: Approve the exact draft and target for publication.
+Done-When: The user approves this exact pull-request draft and target.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-003
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Share one per-program call-expression index across both existing resolver legs.
-Commit: Pending.
-Push: Pending.
+Commit: `204e9f73d85ffefe4820ef0472da5bd5f4741b29`
+Push: `origin/fix/issue-003`
 Checks:
 
-- Pending.
+- `bun test test/external-resolution.test.ts test/dataflow.test.ts test/schema-v2.test.ts` → 92 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Three alternating Level-2 comparisons produced byte-identical application JSON.
 
 ## Publication-Draft
 
@@ -99,14 +101,14 @@ Body:
 
 ## Evidence
 
-- The two self-analysis index passes covered the same 3,023 call-like AST nodes.
-- Those duplicate passes took 103 ms and 101 ms.
+- The former passes indexed the same 3,022 call-like AST nodes in 103 ms and 101 ms.
+- The shared pass took 97.6–119.0 ms across five samples.
 
 ## Validation
 
-- `bun test test/external-resolution.test.ts test/dataflow.test.ts`
+- `bun test test/external-resolution.test.ts test/dataflow.test.ts test/schema-v2.test.ts`
 - `bun run typecheck`
-- Exact comparison of call edges, weights, tags, resolutions, and phantoms.
+- Three exact Level-2 application-output comparisons.
 
 ## Prior art
 

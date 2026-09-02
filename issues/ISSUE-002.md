@@ -1,6 +1,6 @@
 # ISSUE-002 — neo4j: row sorting rebuilds composite keys per comparison
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -49,39 +49,41 @@ Compute each final row's current composite sort key once, sort decorated rows by
 
 ## Verification
 
-- Existing Neo4j projection and edge-identity tests → unchanged row and snapshot contracts.
-- Self-analysis row identity comparison → exact node and edge order.
-- Self-analysis projection measurement → sort and total `project()` time recorded.
+- `bun test test/neo4j-edge-identity.test.ts test/neo4j-schema.test.ts` → 13 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Baseline and candidate projections produced byte-identical row JSON.
 
 ## Performance-Evidence
 
-Workload: Actual `RowBuilder` insertion order from this repository's Level-4 Neo4j projection.
-Baseline [O]: 14,622 nodes plus 43,832 edges sorted in 165 ms.
-Candidate [O]: Prototype exact-key decoration sorted the same rows in 49 ms.
-Guard [O]: Every node and edge retained identical identity order.
-Boundary: The measurement isolates sorting; end-to-end projection improvement remains unmeasured.
+Workload: One Level-4 application projected to 58,447 Neo4j rows in five alternating runs.
+Baseline [O]: Current `project()` samples took 201.6–237.5 ms.
+Candidate [O]: Cached-key `project()` samples took 86.5–89.5 ms.
+Guard [O]: Every node and edge retained identical content and order.
+Boundary: The measurement covers projection but excludes analysis and output writing.
 End-to-end-Measurement: Not measured
 
 ## Publication-Blockers
 
-- Implementation, focused checks, exact pull-request draft, and final approval of that draft and target remain pending.
+- Final user approval of the exact pull-request draft and target remains pending.
 
 ## Next-Action
 
-Summary: Implement cached sort keys
-Action: Implement exact-key decoration on `fix/issue-002` without changing ordering semantics.
-Done-When: Focused tests, exact-order comparison, and candidate measurement pass.
+Summary: Approve exact PR draft
+Action: Approve the exact draft and target for publication.
+Done-When: The user approves this exact pull-request draft and target.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-002
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Precompute current Neo4j row sort keys once per final row.
-Commit: Pending.
-Push: Pending.
+Commit: `b9fb298cae45bcbb9c7dc2681d2c14db6630039e`
+Push: `origin/fix/issue-002`
 Checks:
 
-- Pending.
+- `bun test test/neo4j-edge-identity.test.ts test/neo4j-schema.test.ts` → 13 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Baseline and candidate projections produced byte-identical row JSON.
 
 ## Publication-Draft
 
@@ -97,14 +99,14 @@ Body:
 
 ## Evidence
 
-- Sorting 14,622 nodes and 43,832 edges took 165 ms with per-comparison key construction.
-- Exact-key decoration sorted the same rows in 49 ms with identical identity order.
+- Five baseline projections took 201.6–237.5 ms.
+- Cached-key projections took 86.5–89.5 ms with byte-identical row JSON.
 
 ## Validation
 
-- `bun test test/neo4j-edge-identity.test.ts`
+- `bun test test/neo4j-edge-identity.test.ts test/neo4j-schema.test.ts`
 - `bun run typecheck`
-- Exact node and edge identity-order comparison on the self-analysis projection.
+- Exact node and edge content-order comparison on the self-analysis projection.
 
 ## Prior art
 

@@ -1,6 +1,6 @@
 # ISSUE-004 — cache: warm level-one hits still construct compiler projects
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -52,39 +52,41 @@ Reuse that classification on partial and cold paths so file metadata is not chec
 
 ## Verification
 
-- Existing Level-1 cache and schema tests → cold, warm, partial, and invalidated behavior pass.
-- Before and after warm self-analysis → emitted Level-1 application JSON is byte-identical.
-- Warm self-analysis measurement → elapsed time and peak RSS recorded.
+- `bun test test/l1-body-cache-shape.test.ts test/multi-tsconfig.test.ts test/schema-v2.test.ts` → 52 pass.
+- `bun run typecheck` → passed.
+- Five warm baseline and candidate outputs matched byte for byte.
 
 ## Performance-Evidence
 
-Workload: Same-process Level-1 analysis of this repository with 57 unchanged source files.
-Baseline [O]: Warm end-to-end runs took 105 ms and 116 ms; warm symbol-table construction took 41 ms.
-Candidate [O]: Project-free cache validation took about 1 ms; full candidate remains pending.
-Guard [O]: Pending exact application-output comparison and Levels 2–4 regression checks.
-Boundary: Source discovery, artifact inventory, cache reads, and final serialization still execute.
-End-to-end-Measurement: Not measured
+Workload: Five alternating warm Level-1 runs over one 57-module target under Bun 1.4.0 on Linux x86_64.
+Baseline [O]: Current warm runs took 94.1–100.7 ms with a 98.7 ms median.
+Candidate [O]: Project-free warm runs took 53.6–62.1 ms with a 56.7 ms median.
+Guard [O]: Every baseline and candidate application output matched byte for byte.
+Boundary: Source discovery, artifact inventory, cache reads, and finalization still execute.
+End-to-end-Measurement: Median warm Level-1 time fell 42.6%, from 98.7 ms to 56.7 ms.
 
 ## Publication-Blockers
 
-- Implementation, focused checks, exact pull-request draft, and final approval of that draft and target remain pending.
+- Final user approval of the exact pull-request draft and target remains pending.
 
 ## Next-Action
 
-Summary: Implement warm cache fast path
-Action: Add the complete-hit Level-1 fast path on `fix/issue-004` without changing other levels.
-Done-When: Cache tests, exact output comparison, and warm candidate measurement pass.
+Summary: Approve exact PR draft
+Action: Approve the exact draft and target for publication.
+Done-When: The user approves this exact pull-request draft and target.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-004
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Skip compiler-project construction only for complete warm Level-1 cache hits.
-Commit: Pending.
-Push: Pending.
+Commit: `989a90ea6fb40257da1bec2a19bbe691cb21fe7b`
+Push: `origin/fix/issue-004`
 Checks:
 
-- Pending.
+- `bun test test/l1-body-cache-shape.test.ts test/multi-tsconfig.test.ts test/schema-v2.test.ts` → 52 pass.
+- `bun run typecheck` → passed.
+- Five warm baseline and candidate outputs matched byte for byte.
 
 ## Publication-Draft
 
@@ -100,14 +102,14 @@ Body:
 
 ## Evidence
 
-- Same-process warm Level-1 self-analysis took 105–116 ms.
-- Cache validation for the same 57 unchanged source files took about 1 ms.
+- Five current warm Level-1 runs took 94.1–100.7 ms with a 98.7 ms median.
+- Project-free runs took 53.6–62.1 ms with a 56.7 ms median and byte-identical output.
 
 ## Validation
 
-- Existing Level-1 cache and schema tests.
+- `bun test test/l1-body-cache-shape.test.ts test/multi-tsconfig.test.ts test/schema-v2.test.ts`
 - `bun run typecheck`
-- Exact application-output comparison across cold and warm Level-1 runs.
+- Five exact warm Level-1 application-output comparisons.
 
 ## Prior art
 

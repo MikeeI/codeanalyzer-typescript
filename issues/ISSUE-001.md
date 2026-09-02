@@ -1,6 +1,6 @@
 # ISSUE-001 — neo4j: Cypher snapshot materializes complete output string
 
-State: Implementing
+State: PR-Ready
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: Not published.
@@ -52,39 +52,41 @@ Generate batches by offset so the streaming path never materializes all batch sl
 
 ## Verification
 
-- `bun test test/neo4j-edge-identity.test.ts` → existing Cypher identity contracts pass.
-- Byte comparison of legacy and streamed self-analysis snapshots → exact match.
-- Self-analysis snapshot measurement → elapsed time and peak RSS recorded.
+- `bun test test/neo4j-schema.test.ts test/neo4j-edge-identity.test.ts` → 13 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Compatibility rendering and streamed file output matched for all 14,419,011 bytes.
 
 ## Performance-Evidence
 
-Workload: This repository analyzed at Level 4, projected to 58,454 Neo4j rows; Bun 1.4.0 on Linux x86_64.
-Baseline [O]: `renderCypher` produced 13,831,356 bytes in 154 ms; peak RSS not measured.
-Candidate [O]: Pending implementation measurement.
-Guard [O]: Pending byte comparison against the current renderer.
-Boundary: `GraphRows` and grouping maps remain resident; only rendered block and joined-string duplication is removed.
+Workload: This repository at Level 4 produced 58,447 Neo4j rows and 14,419,011 Cypher bytes.
+Baseline [O]: Five compatibility-render samples took 146.5–163.3 ms.
+Candidate [O]: Five streamed-write samples took 121.9–147.6 ms.
+Guard [O]: Every streamed output byte matched the compatibility renderer.
+Boundary: `GraphRows` and grouping maps remain resident; rendered block and joined-string duplication is removed.
 End-to-end-Measurement: Not measured
 
 ## Publication-Blockers
 
-- Implementation, focused checks, exact pull-request draft, and final approval of that draft and target remain pending.
+- Final user approval of the exact pull-request draft and target remains pending.
 
 ## Next-Action
 
-Summary: Implement lazy Cypher writer
-Action: Implement the scoped writer on `fix/issue-001` and preserve exact snapshot bytes.
-Done-When: Focused tests and byte comparison pass on the contribution branch.
+Summary: Approve exact PR draft
+Action: Approve the exact draft and target for publication.
+Done-When: The user approves this exact pull-request draft and target.
 
 ## Pull-Request-Implementation
 
 Branch: fix/issue-001
 Base: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 Scope: Lazy Cypher blocks and a lifecycle-safe file writer with no JSON or Bolt changes.
-Commit: Pending.
-Push: Pending.
+Commit: `906c720676b2c3231fcda9397ca0e10beb320643`
+Push: `origin/fix/issue-001`
 Checks:
 
-- Pending.
+- `bun test test/neo4j-schema.test.ts test/neo4j-edge-identity.test.ts` → 13 pass and 0 fail.
+- `bun run typecheck` → passed.
+- Compatibility rendering and streamed file output matched for all 14,419,011 bytes.
 
 ## Publication-Draft
 
@@ -100,14 +102,14 @@ Body:
 
 ## Evidence
 
-- Self-analysis projected 58,454 rows into 13,831,356 bytes of Cypher.
-- The current renderer took 154 ms and retained both statement blocks and the joined output string.
+- Self-analysis projected 58,447 rows into 14,419,011 bytes of Cypher.
+- Five streamed writes took 121.9–147.6 ms and matched compatibility rendering byte for byte.
 
 ## Validation
 
-- `bun test test/neo4j-edge-identity.test.ts`
+- `bun test test/neo4j-schema.test.ts test/neo4j-edge-identity.test.ts`
 - `bun run typecheck`
-- Exact byte comparison between compatibility rendering and streamed file output.
+- Exact 14,419,011-byte comparison between compatibility rendering and streamed file output.
 
 ## Prior art
 
