@@ -168,13 +168,17 @@ export async function boltWriter(
     await upsertEdges(session, neo4j, edges);
 
     // 7. orphan prune — only safe on a full run (a targeted run can't tell deleted from untargeted).
-    if (fullRun && eager) {
+    // appId === null would make `STARTS WITH ""` match every node in the store.
+    if (fullRun && eager && appId !== null) {
       const present = [...byModule.keys()];
       await withSession(session, async (s) => {
+        // Anchored on :CanNode AND this app's id prefix, same as EAGER_PURGE. `MATCH (m:TSModule)`
+        // alone would reach a SECOND TypeScript application in the same database -- every one of
+        // its modules is "not in this app's $present" -- and any 1.x twin-labelled node too (#116).
         const res = await s.run(
-          `MATCH (m:TSModule) WHERE NOT m._module IN $present ` +
-            `OPTIONAL MATCH (m)-${DESCENDANTS}->(x) DETACH DELETE x, m RETURN count(m) AS pruned`,
-          { present },
+          `MATCH (m:TSModule:CanNode) WHERE m.id STARTS WITH $prefix AND NOT m._module IN $present ` +
+            `OPTIONAL MATCH (m)-${DESCENDANTS}->(x) DETACH DELETE x, m RETURN count(DISTINCT m) AS pruned`,
+          { present, prefix: appId },
         );
         const pruned = res.records[0]?.get("pruned") ?? 0;
         log.info(`neo4j(bolt): pruned ${pruned} vanished module(s)`);
