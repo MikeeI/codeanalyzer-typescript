@@ -58,6 +58,7 @@ async function emitNeo4j(application: TSAnalysis, opts: AnalysisOptions): Promis
       },
       log,
       opts.targetFiles === null, // full run ⇒ orphan pruning is safe
+      opts.eager, // --eager ⇒ purge this app's graph and rebuild; otherwise never delete
     );
     return;
   }

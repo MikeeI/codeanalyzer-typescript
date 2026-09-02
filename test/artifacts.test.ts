@@ -222,7 +222,10 @@ describe("Neo4j projection — neutral :Artifact/:Package (#101)", () => {
     const art = rows.nodes.find((n) => n.value === "can://artifact/artifacts-app/package.json");
     expect(art?.labels).toEqual(["Artifact"]);
     expect(art?.props["roles"]).toEqual(["dependency-manifest", "tool-config"]);
-    expect(art?.props["source"]).toBeUndefined(); // text stays off the graph
+    // Artifact text belongs on the graph: python has carried `source` on :Artifact since it
+    // shipped the layer, so a consumer reading the same neutral node from two analyzers must not
+    // get text from one and nothing from the other (#116).
+    expect(art?.props["source"]).toBeDefined();
     const pkg = rows.nodes.find((n) => n.value === "pkg:npm/react");
     expect(pkg?.labels).toEqual(["Package"]);
     const scoped = rows.nodes.find((n) => n.value === "pkg:npm/%40scope/util");
