@@ -1,9 +1,9 @@
 # ISSUE-005 — dataflow: throwability scans each subtree up to four times
 
-State: PR-Ready
+State: Submitted
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
-External-Reference: Not published.
+External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/124
 Contribution-Priority: Low
 Root-Cause-Confidence: High
 Finding-Category: Performance
@@ -64,13 +64,13 @@ End-to-end-Measurement: Not measured
 
 ## Publication-Blockers
 
-- Final user approval of the exact pull-request draft and target remains pending.
+None.
 
 ## Next-Action
 
-Summary: Approve exact PR draft
-Action: Approve the exact draft and target for publication.
-Done-When: The user approves this exact pull-request draft and target.
+Summary: Monitor upstream review
+Action: Monitor pull request #124 for CI results or maintainer feedback.
+Done-When: The pull request state changes or actionable feedback arrives.
 
 ## Pull-Request-Implementation
 

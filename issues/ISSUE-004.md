@@ -1,9 +1,9 @@
 # ISSUE-004 — cache: warm level-one hits still construct compiler projects
 
-State: PR-Ready
+State: Submitted
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
-External-Reference: Not published.
+External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/123
 Contribution-Priority: Medium
 Root-Cause-Confidence: High
 Finding-Category: Performance
@@ -67,13 +67,13 @@ End-to-end-Measurement: Median warm Level-1 time fell 42.6%, from 98.7 ms to 56.
 
 ## Publication-Blockers
 
-- Final user approval of the exact pull-request draft and target remains pending.
+None.
 
 ## Next-Action
 
-Summary: Approve exact PR draft
-Action: Approve the exact draft and target for publication.
-Done-When: The user approves this exact pull-request draft and target.
+Summary: Monitor upstream review
+Action: Monitor pull request #123 for CI results or maintainer feedback.
+Done-When: The pull request state changes or actionable feedback arrives.
 
 ## Pull-Request-Implementation
 
