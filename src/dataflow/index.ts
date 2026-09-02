@@ -71,6 +71,7 @@ export function startExtraction(
   tsConfigFilePath: string | null,
   opts: AnalysisOptions,
   log: Logger,
+  existingPool: WorkerPool | null = null,
 ): ExtractionHandle {
   const callables = collectCallables(symbol_table);
 
@@ -101,7 +102,7 @@ export function startExtraction(
 
   let pool: WorkerPool;
   try {
-    pool = new WorkerPool(workerCount);
+    pool = existingPool ?? new WorkerPool(workerCount);
   } catch (e) {
     log.warn(`graph workers unavailable (${(e as Error).message}); extracting sequentially`);
     return { promise: Promise.resolve(extractSequential(project, callables, opts)), pool: null };

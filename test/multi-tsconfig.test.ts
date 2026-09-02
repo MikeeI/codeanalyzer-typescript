@@ -19,11 +19,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { analyze } from "../src/core";
 import type { AnalysisOptions } from "../src/options";
-import type { TSApplication } from "../src/schema";
+import { forEachCallable, type TSApplication } from "../src/schema";
 
 const FIXTURE = path.resolve(import.meta.dir, "fixtures/multi-tsconfig-app");
 
-function options(): AnalysisOptions {
+function options(over: Partial<AnalysisOptions> = {}): AnalysisOptions {
   return {
     input: FIXTURE,
     output: null,
@@ -44,13 +44,14 @@ function options(): AnalysisOptions {
     phantoms: true,
     cacheDir: null,
     verbosity: 0,
+    ...over,
   };
 }
 
-async function run(): Promise<TSApplication> {
+async function run(over: Partial<AnalysisOptions> = {}): Promise<TSApplication> {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "cants-multitsconfig-test-"));
   try {
-    return (await analyze({ ...options(), cacheDir })).internal;
+    return (await analyze({ ...options(over), cacheDir })).internal;
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -94,5 +95,19 @@ describe("multi-tsconfig program construction (#56)", () => {
     const edge = app.call_graph.find((e) => e.source === "src/server.serve");
     expect(edge?.target).toBe("src/util.greet");
     expect(edge?.provenance).toContain("tsc");
+  });
+
+  test("level 3 emits graphs for callables owned by every program", async () => {
+    const app = await run({ analysisLevel: 3, graphs: ["cfg"], jobs: 2 });
+    const graphed = new Set<string>();
+    for (const mod of Object.values(app.symbol_table)) {
+      forEachCallable(mod, (callable) => {
+        if (callable.cfg) graphed.add(callable.signature);
+      });
+    }
+
+    expect(graphed).toContain("src/server.serve");
+    expect(graphed).toContain("web/src/main.boot");
+    expect(graphed).toContain("web/src/app/service.svc");
   });
 });

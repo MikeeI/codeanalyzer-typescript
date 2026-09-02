@@ -1,6 +1,7 @@
 import * as path from "node:path";
-import { buildProgramGraphs, startExtraction } from "./dataflow";
-import { type LinkerResolutions, mergeCallGraphs, runDefuseLinker, tscProvider } from "./semantic_analysis";
+import { type ExtractionHandle, buildProgramGraphs, startExtraction } from "./dataflow";
+import type { CallableGraphData } from "./dataflow/model";
+import { type CallGraphResult, type LinkerResolutions, mergeCallGraphs, runDefuseLinker, tscProvider } from "./semantic_analysis";
 import { loadCache, saveCache } from "./utils";
 import { materialize } from "./build";
 import { inventoryArtifacts } from "./artifacts";
@@ -31,53 +32,61 @@ export async function analyze(opts: AnalysisOptions): Promise<AnalysisResult> {
   const cached = opts.eager ? null : loadCache(cacheDir);
   const { project, symbol_table, programs } = buildSymbolTable(opts, mat, cached?.symbol_table ?? null, log);
 
-  // Level 3: post stage-1–4 graph extraction to the worker pool BEFORE the call-graph solve —
-  // extraction doesn't need callee resolution, so the two run concurrently (the contract's
-  // "points-to solve runs concurrently with stages 1–4") and join in buildProgramGraphs.
-  //
-  // Multi-program (#56) NOTE: each BuiltProgram carries its owning tsconfig (`configPath`), so the
-  // file→program config map exists here. Threading it per-file into the dataflow workers (each
-  // builds its own Project from ONE tsconfig, src/dataflow/worker.ts) is deferred: extraction still
-  // uses the root program's config, so at L3 files in a NESTED program are analyzed with the root
-  // options. Documented limitation — L2 call-graph resolution (the #56 gate) is fully per-program.
-  if (opts.analysisLevel >= 3 && programs.length > 1) {
-    log.warn(`L3 dataflow uses the root tsconfig for all ${programs.length} programs; nested-program files may under-resolve (see #56)`);
-  }
-  const extraction = opts.analysisLevel >= 3 ? startExtraction(project, symbol_table, mat.tsConfigFilePath, opts, log) : null;
+  // Each program owns both its checker and its graph extraction configuration. Start extraction
+  // before resolving that program's calls so worker mode preserves the intended overlap, then join
+  // before advancing. Reusing one pool bounds worker-project residency across monorepo programs.
+  const graphData = new Map<string, CallableGraphData>();
+  let graphPool: ExtractionHandle["pool"] = null;
 
-  // Call graph: the tsc resolver, per program (each with its own Project + its slice of callables
-  // via `only`), merged across programs. Only worth running at level >= 2: finalizeAnalysis
-  // discards call_graph/external_symbols/synthesized_callables at -a 1 (homeExternals/
-  // homeSynthesized in src/schema/emit.ts are gated to `level >= 2`), so running the solve at
-  // -a 1 would compute a result that's thrown away. Levels 3/4 need it for callee resolution and
-  // are always >= 2, so this gate is safe. Signature gating uses the full merged symbol_table
-  // (passed to every program), so a cross-program in-project call resolves.
-  let cg: ReturnType<typeof tscProvider.build> = { edges: [], external_symbols: {}, synthesized_callables: {} };
+  let cg: CallGraphResult = { edges: [], external_symbols: {}, synthesized_callables: {} };
   const resolutions: LinkerResolutions = new Map();
-  if (opts.analysisLevel >= 2) {
-    for (const prog of programs) {
-      const ctx = {
-        project: prog.project,
-        symbol_table,
-        root: opts.input,
-        log,
-        phantoms: opts.phantoms,
-        only: prog.fileKeys,
-      };
-      cg = mergeCallGraphs(cg, tscProvider.build(ctx));
-      // The defuse linker overlays the tsc base: it reads the callee_signature backfill the tsc
-      // leg just wrote, resolves what remains (tiers T1–T5, defuseLinker.ts), and returns its
-      // body-node resolutions out-of-band (never persisted — cache provenance rule).
-      const linked = runDefuseLinker(ctx);
-      cg = mergeCallGraphs(cg, linked.result);
-      for (const [caller, m] of linked.resolutions) {
-        const ex = resolutions.get(caller);
-        if (!ex) resolutions.set(caller, m);
-        else for (const [k, v] of m) if (!ex.has(k)) ex.set(k, v);
+  for (const prog of programs) {
+    const ownedSymbols = Object.fromEntries(
+      Object.entries(symbol_table).filter(([fileKey]) => prog.fileKeys.has(fileKey)),
+    );
+    const extraction: ExtractionHandle | null = opts.analysisLevel >= 3
+      ? startExtraction(prog.project, ownedSymbols, prog.configPath, opts, log, graphPool)
+      : null;
+
+    try {
+      if (opts.analysisLevel >= 2) {
+        const ctx = {
+          project: prog.project,
+          symbol_table,
+          root: opts.input,
+          log,
+          phantoms: opts.phantoms,
+          only: prog.fileKeys,
+        };
+        cg = mergeCallGraphs(cg, tscProvider.build(ctx));
+        // The defuse linker overlays the tsc base: it reads the callee_signature backfill the tsc
+        // leg just wrote, resolves what remains (tiers T1–T5, defuseLinker.ts), and returns its
+        // body-node resolutions out-of-band (never persisted — cache provenance rule).
+        const linked = runDefuseLinker(ctx);
+        cg = mergeCallGraphs(cg, linked.result);
+        for (const [caller, m] of linked.resolutions) {
+          const ex = resolutions.get(caller);
+          if (!ex) resolutions.set(caller, m);
+          else for (const [k, v] of m) if (!ex.has(k)) ex.set(k, v);
+        }
       }
+
+      if (extraction) {
+        for (const [signature, data] of await extraction.promise) graphData.set(signature, data);
+        graphPool = extraction.pool;
+      }
+    } catch (error) {
+      extraction?.pool?.close();
+      if (graphPool !== extraction?.pool) graphPool?.close();
+      throw error;
     }
   }
   const call_graph = cg.edges;
+
+  const extraction: ExtractionHandle | null = opts.analysisLevel >= 3
+    ? { promise: Promise.resolve(graphData), pool: graphPool }
+    : null;
+  const pg = extraction ? await buildProgramGraphs(extraction, symbol_table, opts, log) : null;
 
   // Repository-artifact layer (#101, python PR #160 parity): level-free, identical at every -a.
   const layer = inventoryArtifacts(opts.input, opts, symbol_table);
@@ -96,9 +105,8 @@ export async function analyze(opts: AnalysisOptions): Promise<AnalysisResult> {
     unresolved_imports: layer.unresolved_imports,
   };
 
-  // Level 3 join: stages 5–7 (summary wavefront + SDG) consume the extraction AND the
-  // provider-backfilled callee signatures. Strictly flag-gated so -a 1/-a 2 cost nothing.
-  const pg = extraction ? await buildProgramGraphs(extraction, symbol_table, opts, log) : null;
+  // Graph extraction and the provider-backed call graph are joined above before artifacts and
+  // per-run schema passes, so every program contributes to the same deterministic graph envelope.
 
   // Cache the id-free base (ids/body/heritage are per-run layers stamped by finalizeAnalysis;
   // the cached tree must stay --app-name-free).
