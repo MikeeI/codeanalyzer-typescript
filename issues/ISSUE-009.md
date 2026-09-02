@@ -1,9 +1,9 @@
 # ISSUE-009 — dataflow: nested programs use the root compiler context
 
-State: PR-Ready
+State: Submitted
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
-External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/issues/111
+External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/127
 Contribution-Priority: High
 Root-Cause-Confidence: High
 Finding-Category: Correctness
@@ -54,13 +54,13 @@ Merge extracted callable data before summary and SDG composition.
 
 ## Publication-Blockers
 
-- Final approval of the exact current pull request draft remains pending.
+None.
 
 ## Next-Action
 
-Summary: Approve pull request
-Action: Approve the exact current Publication-Draft for upstream submission.
-Done-When: The pull request is authorized for publication.
+Summary: Await upstream review
+Action: Await maintainer review and CI for pull request #127.
+Done-When: The pull request receives feedback or reaches a final outcome.
 
 ## Pull-Request-Implementation
 

@@ -1,9 +1,9 @@
 # ISSUE-018 — cfg: labeled statements lose break targets
 
-State: PR-Ready
+State: Submitted
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
-External-Reference: Not published.
+External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/135
 Contribution-Priority: Medium
 Root-Cause-Confidence: High
 Finding-Category: Correctness
@@ -50,13 +50,13 @@ Retain continue targets only for labeled iteration statements.
 
 ## Publication-Blockers
 
-- Final approval of the exact current pull request draft remains pending.
+None.
 
 ## Next-Action
 
-Summary: Approve pull request
-Action: Approve the exact current Publication-Draft for upstream submission.
-Done-When: The pull request is authorized for publication.
+Summary: Await upstream review
+Action: Await maintainer review and CI for pull request #135.
+Done-When: The pull request receives feedback or reaches a final outcome.
 
 ## Pull-Request-Implementation
 

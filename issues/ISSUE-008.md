@@ -1,9 +1,9 @@
 # ISSUE-008 — neo4j: removed artifacts remain in projected state
 
-State: PR-Ready
+State: Submitted
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
-External-Reference: Not published.
+External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/126
 Contribution-Priority: High
 Root-Cause-Confidence: High
 Finding-Category: Correctness
@@ -52,13 +52,13 @@ Preserve shared package nodes while deleting their stale application-owned relat
 
 ## Publication-Blockers
 
-- Final approval of the exact current pull request draft remains pending.
+None.
 
 ## Next-Action
 
-Summary: Approve pull request
-Action: Approve the exact current Publication-Draft for upstream submission.
-Done-When: The pull request is authorized for publication.
+Summary: Await upstream review
+Action: Await maintainer review and CI for pull request #126.
+Done-When: The pull request receives feedback or reaches a final outcome.
 
 ## Pull-Request-Implementation
 
