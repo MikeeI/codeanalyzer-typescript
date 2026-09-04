@@ -13,7 +13,6 @@ Next finding ID: ISSUE-019
 
 | ID | Finding | State | Authorized-Work | Publication-Target | Contribution-Priority | Next-Action | External-Reference |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [ISSUE-001](issues/ISSUE-001.md) | neo4j: Cypher snapshot materializes complete output string | Submitted | Pull-Request-Implementation | New-pull-request | Medium | Await workflow approval | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/120 |
 | [ISSUE-002](issues/ISSUE-002.md) | neo4j: row sorting rebuilds composite keys per comparison | Submitted | Pull-Request-Implementation | New-pull-request | Medium | Await workflow approval | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/121 |
 | [ISSUE-003](issues/ISSUE-003.md) | call graph: both resolvers rebuild the same AST index | Submitted | Pull-Request-Implementation | New-pull-request | Medium | Await workflow approval | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/122 |
 | [ISSUE-004](issues/ISSUE-004.md) | cache: warm level-one hits still construct compiler projects | Submitted | Pull-Request-Implementation | New-pull-request | Medium | Await workflow approval | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/123 |
@@ -34,5 +33,6 @@ Next finding ID: ISSUE-019
 
 | ID | Finding | Authorized-Work | Publication-Target | Contribution-Priority | Archive-Reason | External-Reference |
 | --- | --- | --- | --- | --- | --- | --- |
+| [ISSUE-001](issues/archive/ISSUE-001.md) | neo4j: Cypher snapshot materializes complete output string | Pull-Request-Implementation | New-pull-request | Medium | Merged | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/120 |
 | [ISSUE-007](issues/archive/ISSUE-007.md) | neo4j: Bolt reconciliation is not application-isolated | Pull-Request-Implementation | New-pull-request | High | Duplicate | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/117 |
 | [ISSUE-017](issues/archive/ISSUE-017.md) | neo4j: projected modules omit incremental content hashes | Pull-Request-Implementation | New-pull-request | Medium | Duplicate | https://github.com/codellm-devkit/codeanalyzer-typescript/pull/119 |

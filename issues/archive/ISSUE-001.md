@@ -1,6 +1,6 @@
 # ISSUE-001 — neo4j: Cypher snapshot materializes complete output string
 
-State: Submitted
+State: Archived
 Authorized-Work: Pull-Request-Implementation
 Publication-Target: New-pull-request
 External-Reference: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/120
@@ -8,7 +8,7 @@ Contribution-Priority: Medium
 Root-Cause-Confidence: High
 Finding-Category: Performance
 Created: 2026-09-02
-Updated: 2026-09-02
+Updated: 2026-09-04
 Source: `upstream/main@234895e3fc7834256b8962a2a5293222d6e0b3f0`
 
 ## Root-Cause
@@ -71,9 +71,9 @@ None.
 
 ## Next-Action
 
-Summary: Await workflow approval
-Action: Await maintainer approval for GitHub Actions run 33626458308 on pull request #120.
-Done-When: The CI run starts or reaches a test conclusion.
+Summary: —
+Action: None.
+Done-When: None.
 
 ## Pull-Request-Implementation
 
@@ -123,3 +123,10 @@ Its claims were checked against the cited evidence, and it includes the relevant
 If reports like this are not useful to the project, please let me know and I will refrain from submitting similar ones.
 My intent is to help without wasting maintainer time or energy or discouraging their work.
 Thank you for your work.
+
+## Archive
+
+Archive-Reason: Merged
+Detail: Pull request #120 merged upstream.
+Evidence: https://github.com/codellm-devkit/codeanalyzer-typescript/pull/120
+Checked: 2026-09-04
