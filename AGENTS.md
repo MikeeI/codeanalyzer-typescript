@@ -16,11 +16,6 @@ The analyzer mirrors the CLDK Python and Java backends, so output-shape parity i
 
 - Official upstream: [codellm-devkit/codeanalyzer-typescript](https://github.com/codellm-devkit/codeanalyzer-typescript).
 - This checkout is the [MikeeI/codeanalyzer-typescript](https://github.com/MikeeI/codeanalyzer-typescript) fork.
-- The local checkout directory is `project-cants-fork`.
-- `origin` is the personal fork and `upstream` is the canonical repository.
-- The canonical upstream branch is `main`.
-- The `personal` branch owns fork context and contribution tracking.
-- Upstream-ready source work uses separate `feat/issue-XXX`, `fix/issue-XXX`, or `chore/issue-XXX` branches.
 - Fork-only context, ledgers, configuration, and commits stay out of upstream contribution diffs.
 - The goal is evidence-backed, high-value upstream issues, comments, and pull requests.
 - Search existing upstream work before drafting a contribution and avoid duplicates or speculative cleanup.
@@ -28,6 +23,14 @@ The analyzer mirrors the CLDK Python and Java backends, so output-shape parity i
 - Research-and-Reporting permits research, issues, and comments but no source implementation.
 - Pull-Request-Implementation permits only the scoped source change recorded for a finding.
 - Publish externally only after the user approves the exact current publication target and draft.
+
+## Branch Roles
+
+- The canonical upstream branch is `main`.
+- The `personal` branch owns fork context and contribution tracking.
+- Upstream-ready source work uses separate `feat/issue-NNN`, `fix/issue-NNN`, or `chore/issue-NNN` branches off `upstream/main`.
+- Remotes: `origin` is the personal fork, `upstream` is `codellm-devkit/codeanalyzer-typescript`.
+- Legacy: the local checkout directory is `project-cants-fork`; branches such as `feat/issue-098-defuse-linker` predate the `issue-NNN` rule and stay unchanged.
 
 ## Finding and Contribution Ledger
 
